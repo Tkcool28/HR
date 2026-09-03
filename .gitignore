@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+.DS_Store
+
+# Generated/model data are recreated or published as Actions/release artifacts.
+*.parquet
+*.joblib
+*.pkl
+*.pickle
+
+# Local scratch/output
+artifacts/
+data/scratch/
