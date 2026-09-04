@@ -1,0 +1,123 @@
+name: v1.2 2022 disagreement freshness check
+
+on:
+  push:
+    branches:
+      - feat/v1.2-trustworthy-rebuild
+    paths:
+      - 'experiments/v12_score_frozen_2022_raw.py'
+      - 'experiments/v12_edge_localization_2022.py'
+      - 'experiments/v12_nearest_rank_matched_2022.py'
+      - '.github/workflows/v12-2022-freshness-check.yml'
+  workflow_dispatch:
+
+jobs:
+  freshness-2022:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            'pandas==2.2.3' 'numpy>=1.26,<3' 'pyarrow>=16,<22' \
+            'requests>=2.32,<3' 'scikit-learn>=1.5,<2' \
+            'xgboost>=2.1,<4'
+
+      - name: Reconstruct trusted 2015-2024 inputs
+        run: |
+          set -euxo pipefail
+          rm -rf work
+          mkdir -p work/hr_model
+          tar -xzf package_bundles/v1.2_correction/00_v12_code_tests_reports.tar.gz -C work
+          tar -xzf package_bundles/03_raw_pa_2015_2017.tar.gz -C work/hr_model
+          tar -xzf package_bundles/04_raw_pa_2018_2020.tar.gz -C work/hr_model
+          tar -xzf package_bundles/05_raw_pa_2021_2024.tar.gz -C work/hr_model
+          tar -xzf package_bundles/02_bip_all.tar.gz -C work/hr_model
+          tar -xzf package_bundles/01_curated_small_and_splits.tar.gz -C work/hr_model \
+            data/curated/game.parquet \
+            data/splits/train_ids.parquet \
+            data/splits/val_ids.parquet
+          test ! -e work/hr_model/data/splits/holdout_ids.parquet
+          test ! -e work/hr_model/models/holdout_predictions.parquet
+          cp trusted_v12/process_park_factors_trusted.py work/hr_model/src/data/process_park_factors_v12.py
+          sudo mkdir -p /workspace
+          sudo rm -rf /workspace/hr_model
+          sudo ln -s "$GITHUB_WORKSPACE/work/hr_model" /workspace/hr_model
+
+      - name: Rebuild frozen trusted 73-feature matrix
+        run: |
+          python trusted_v12/rebuild_v12_trusted.py
+          python trusted_v12/augment_qoc_trusted.py
+          python - <<'PY'
+          import json, pandas as pd
+          root='/workspace/hr_model'
+          cols=json.load(open(root+'/features/v1.2_trusted/feature_list.json'))
+          assert len(cols)==73, len(cols)
+          d=pd.read_parquet(root+'/features/v1.2_trusted/game_features.parquet', columns=['year','game_pk','batter_id'])
+          assert d.year.between(2015,2024).all()
+          assert 2025 not in set(d.year)
+          assert not d.duplicated(['game_pk','batter_id']).any()
+          print('full73 source PASS; 2025 NOT READ')
+          PY
+
+      - name: Score frozen full73 raw on 2022 from pre-2022 training
+        run: |
+          mkdir -p /workspace/hr_model/freshness
+          python experiments/v12_score_frozen_2022_raw.py \
+            --feature-list /workspace/hr_model/features/v1.2_trusted/feature_list.json \
+            --contract experiments/contracts/v12_full73_aggressive.json \
+            --out /workspace/hr_model/freshness/full73_2022_raw.parquet
+
+      - name: Build frozen obvious-power disagreement surface for 2022
+        run: |
+          python experiments/v12_edge_localization_2022.py \
+            --predictions /workspace/hr_model/freshness/full73_2022_raw.parquet \
+            --out /workspace/hr_model/freshness/full73_2022_edge.parquet
+
+      - name: Replay exact nearest-rank matched rule on 2022
+        run: |
+          python experiments/v12_nearest_rank_matched_2022.py \
+            --input /workspace/hr_model/freshness/full73_2022_edge.parquet \
+            --out-json /workspace/hr_model/freshness/full73_2022_matched.json \
+            --out-pairs /workspace/hr_model/freshness/full73_2022_pairs.parquet \
+            --reps 10000 \
+            --seed 20260904
+
+      - name: Verify freshness contract
+        run: |
+          python - <<'PY'
+          import json, pandas as pd
+          p=json.load(open('/workspace/hr_model/freshness/full73_2022_matched.json'))
+          d=p['design']
+          assert d['freshness_year']==2022
+          assert d['calibration_used'] is False
+          assert d['pristine_holdout_claimed'] is False
+          assert d['precommitted_observed_magnitude_floor']==0.05
+          assert d['precommitted_strong_ci_floor']==0.02
+          assert d['holdout_2025_read'] is False
+          assert set(p['year_2022'])=={
+            'obvious_rank_5_8','obvious_rank_9_16','obvious_rank_17_plus'
+          }
+          e=pd.read_parquet('/workspace/hr_model/freshness/full73_2022_edge.parquet')
+          assert set(e.year)=={2022}
+          print('2022 freshness contract PASS; 2025 NOT READ')
+          PY
+
+      - name: Print 2022 freshness result
+        run: cat /workspace/hr_model/freshness/full73_2022_matched.json
+
+      - name: Upload 2022 freshness evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v12-full73-2022-disagreement-freshness
+          if-no-files-found: error
+          path: |
+            work/hr_model/freshness/*.json
+            work/hr_model/freshness/*.parquet
