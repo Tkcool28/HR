@@ -1,7 +1,7 @@
 """Multiplicity-aware follow-up for full73-vs-obvious-power disagreements.
 
 The rank bands (5-8, 9-16, 17+) were declared before the first edge-localization
-run.  Because the 17+ band looked best after observing all three, this script
+run. Because the 17+ band looked best after observing all three, this script
 re-tests all three together rather than promoting that band alone.
 
 For each obvious-power rank band, compare hitters selected into full73's daily
@@ -9,13 +9,13 @@ top four against hitters *not* selected by full73 in the same rank band.
 
 Inference:
 - 10,000 slate-date bootstrap replicates for paired rate-difference CIs.
-- 10,000 within-date randomization replicates under the null that, conditional
-  on date and obvious-rank band, HR outcomes are unrelated to full73 selection.
-  The observed number of selected hitters per date is preserved.
+- 10,000 exact-within-date randomization replicates under the null that,
+  conditional on date and obvious-rank band, HR outcomes are unrelated to
+  full73 selection. The observed number selected per date is preserved.
 - One-sided randomization p-values test selected > control.
 - Holm correction is applied across the three predeclared rank bands.
 
-This is development evidence only (2023-2024).  2025 is rejected.
+This is development evidence only (2023-2024). 2025 is rejected.
 """
 from __future__ import annotations
 
@@ -122,39 +122,50 @@ def bootstrap_dates(frame: pd.DataFrame, band: pd.Series, reps: int, seed: int) 
 
 
 def randomization_test(frame: pd.DataFrame, band: pd.Series, reps: int, seed: int) -> dict:
-    """Within-date label randomization preserving selected count on each date."""
+    """Exact within-date null via hypergeometric selected-HR counts.
+
+    Conditional on a date's rank-band total N, total HR count H, and observed
+    full73-selected count K, random relabeling gives X~Hypergeometric(H,N-H,K)
+    selected HRs. Vectorizing these draws is equivalent to explicitly shuffling
+    batter labels but much faster.
+    """
     z=frame.loc[band,['game_date','hr_in_game','model_top4']].copy()
-    groups=[]
+    rows=[]
     obs_sel=obs_ns=obs_ctl=obs_nc=0
     for _,g in z.groupby('game_date',sort=True):
         y=g.hr_in_game.to_numpy(dtype=np.int8)
-        k=int(g.model_top4.sum())
-        if k==0:
-            # This date contributes only controls to observed rates; no label
-            # assignment is possible, so keep all rows in control in every null draw.
-            pass
-        elif k==len(g):
-            raise RuntimeError('rank band has date with no control rows')
-        groups.append((y,k))
         sel=g.model_top4.to_numpy(dtype=bool)
-        obs_sel += int(y[sel].sum()); obs_ns += int(sel.sum())
-        obs_ctl += int(y[~sel].sum()); obs_nc += int((~sel).sum())
+        n=int(len(g)); h=int(y.sum()); k=int(sel.sum())
+        if k==n and n>0:
+            raise RuntimeError('rank band has date with no control rows')
+        rows.append((n,h,k))
+        obs_sel += int(y[sel].sum()); obs_ns += k
+        obs_ctl += int(y[~sel].sum()); obs_nc += n-k
+    if obs_ns<=0 or obs_nc<=0:
+        raise RuntimeError('empty randomization comparison arm')
     observed=obs_sel/obs_ns-obs_ctl/obs_nc
+
+    arr=np.asarray(rows,dtype=np.int64)
+    n=arr[:,0]; h=arr[:,1]; k=arr[:,2]
     rng=np.random.default_rng(seed)
     null=np.empty(reps,dtype=np.float64)
-    for r in range(reps):
-        ss=ns=sc=nc=0
-        for y,k in groups:
-            n=len(y)
-            if k==0:
-                sc += int(y.sum()); nc += n
-                continue
-            pick=rng.choice(n,size=k,replace=False)
-            chosen=np.zeros(n,dtype=bool); chosen[pick]=True
-            ss += int(y[chosen].sum()); ns += k
-            sc += int(y[~chosen].sum()); nc += n-k
-        null[r]=ss/ns-sc/nc
-    # Add-one correction avoids zero p-values with finite Monte Carlo samples.
+    chunk=1000
+    pos=0
+    total_h=int(h.sum()); total_k=int(k.sum()); total_n=int(n.sum())
+    while pos<reps:
+        q=min(chunk,reps-pos)
+        # Broadcasting per-date hypergeometric parameters over q replicates.
+        x=rng.hypergeometric(
+            ngood=h[None,:],
+            nbad=(n-h)[None,:],
+            nsample=k[None,:],
+            size=(q,len(n)),
+        )
+        sel_h=x.sum(axis=1)
+        ctl_h=total_h-sel_h
+        null[pos:pos+q]=sel_h/total_k-ctl_h/(total_n-total_k)
+        pos+=q
+    # Add-one correction avoids zero Monte Carlo p-values.
     p_one=(1+int(np.sum(null>=observed)))/(reps+1)
     return {
         'n_replicates': int(reps),
@@ -228,7 +239,7 @@ def main() -> None:
             'selected':'full73 daily top4 within stratum',
             'control':'not full73 top4 within same obvious-power rank stratum',
             'primary_uncertainty':'paired slate-date bootstrap',
-            'null_test':'within-date label randomization preserving selected count',
+            'null_test':'exact within-date hypergeometric label randomization preserving selected count',
             'multiplicity':'Holm correction across three strata',
             'alternative':'selected HR rate > control HR rate',
             'development_years':[2023,2024],
