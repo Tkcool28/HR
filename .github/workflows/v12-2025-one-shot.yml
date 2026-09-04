@@ -1,0 +1,204 @@
+name: v1.2 frozen 2025 one-shot holdout
+
+on:
+  push:
+    branches:
+      - feat/v1.2-trustworthy-rebuild
+    paths:
+      - '.github/workflows/v12-2025-one-shot.yml'
+  workflow_dispatch:
+
+jobs:
+  frozen-2025-one-shot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install frozen runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            'pandas==2.2.3' 'numpy>=1.26,<3' 'pyarrow>=16,<22' \
+            'requests>=2.32,<3' 'scikit-learn>=1.5,<2' \
+            'xgboost>=2.1,<4'
+
+      - name: Run synthetic one-shot controls before reading 2025
+        run: python experiments/test_v12_2025_one_shot_controls.py
+
+      - name: Reconstruct historical 2015-2024 inputs only
+        run: |
+          set -euxo pipefail
+          rm -rf work
+          mkdir -p work/hr_model
+          tar -xzf package_bundles/v1.2_correction/00_v12_code_tests_reports.tar.gz -C work
+          tar -xzf package_bundles/03_raw_pa_2015_2017.tar.gz -C work/hr_model
+          tar -xzf package_bundles/04_raw_pa_2018_2020.tar.gz -C work/hr_model
+          tar -xzf package_bundles/05_raw_pa_2021_2024.tar.gz -C work/hr_model
+          tar -xzf package_bundles/02_bip_all.tar.gz -C work/hr_model
+          tar -xzf package_bundles/01_curated_small_and_splits.tar.gz -C work/hr_model \
+            data/curated/game.parquet \
+            data/splits/train_ids.parquet \
+            data/splits/val_ids.parquet
+          test ! -e work/hr_model/data/raw/pa_2025.parquet
+          test ! -e work/hr_model/models/holdout_predictions.parquet
+          cp trusted_v12/process_park_factors_trusted.py work/hr_model/src/data/process_park_factors_v12.py
+          sudo mkdir -p /workspace
+          sudo rm -rf /workspace/hr_model
+          sudo ln -s "$GITHUB_WORKSPACE/work/hr_model" /workspace/hr_model
+
+      - name: Materialize exact frozen 73-feature reference before 2025 acquisition
+        run: |
+          set -euxo pipefail
+          python trusted_v12/rebuild_v12_trusted.py
+          python trusted_v12/augment_qoc_trusted.py
+          mkdir -p /workspace/hr_model/holdout_2025
+          cp /workspace/hr_model/features/v1.2_trusted/feature_list.json \
+             /workspace/hr_model/holdout_2025/frozen_73_feature_list_pre_acquisition.json
+          cp docs/v12_2025_one_shot_freeze_contract_2026-09-04.md \
+             /workspace/hr_model/holdout_2025/freeze_contract.md
+          python - <<'PY'
+          import hashlib,json,os
+          p='/workspace/hr_model/holdout_2025/frozen_73_feature_list_pre_acquisition.json'
+          cols=json.load(open(p)); assert len(cols)==73
+          meta={
+            'github_sha':os.environ['GITHUB_SHA'],
+            'feature_count':len(cols),
+            'feature_list_sha256':hashlib.sha256(open(p,'rb').read()).hexdigest(),
+            'state':'PRE_2025_ACQUISITION_FROZEN_REFERENCE',
+          }
+          open('/workspace/hr_model/holdout_2025/pre_acquisition_freeze.json','w').write(json.dumps(meta,indent=2))
+          print(json.dumps(meta,indent=2))
+          print('FROZEN REFERENCE CAPTURED; 2025 STILL NOT READ')
+          PY
+
+      - name: AUTHORIZED acquire fresh 2025 regular-season Statcast
+        run: |
+          set -euxo pipefail
+          python trusted_v12/acquire_2025_holdout.py
+          cp /workspace/hr_model/data/raw/holdout_2025_acquisition.json \
+             /workspace/hr_model/holdout_2025/holdout_2025_acquisition.json
+
+      - name: Apply exact runtime-only 2025 source-range extension
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib,json,os,shutil
+          root=Path('/workspace/hr_model')
+          out=root/'holdout_2025'; out.mkdir(exist_ok=True)
+          manifest={'github_sha':os.environ['GITHUB_SHA'],'files':{}}
+          def sha(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+          def rep(path,old,new,count):
+              p=Path(path); before=p.read_text(); actual=before.count(old)
+              if actual!=count:
+                  raise RuntimeError(f'{p}: expected {count} exact occurrences of {old!r}, got {actual}')
+              oldsha=sha(p); after=before.replace(old,new); p.write_text(after); newsha=sha(p)
+              manifest['files'].setdefault(str(p),{'before_sha256':oldsha,'replacements':[]})
+              manifest['files'][str(p)]['after_sha256']=newsha
+              manifest['files'][str(p)]['replacements'].append({'old':old,'new':new,'count':count})
+          pa=root/'src/data/build_pa_v12.py'
+          rep(pa,'HOLDOUT_CAP_YEAR = 2024','HOLDOUT_CAP_YEAR = 2025',1)
+          rep(pa,'range(2015, 2025)','range(2015, 2026)',2)
+          pl=root/'src/data/build_pitch_level_v12.py'
+          rep(pl,'HOLDOUT_CAP_YEAR = 2024','HOLDOUT_CAP_YEAR = 2025',1)
+          rep(pl,'range(2015, 2025)','range(2015, 2026)',1)
+          bf=root/'features/v1.2/build_features.py'
+          rep(bf,'HOLDOUT_CAP_DATE = pd.Timestamp("2024-12-31")','HOLDOUT_CAP_DATE = pd.Timestamp("2025-12-31")',1)
+          rep(bf,'upper=2024','upper=2025',1)
+          qsrc=Path('trusted_v12/qoc_features_trusted.py')
+          qdst=root/'qoc_features_2025_runtime.py'; shutil.copy2(qsrc,qdst)
+          rep(qdst,'q.game_date.dt.year.between(2015, 2024).all()','q.game_date.dt.year.between(2015, 2025).all()',1)
+          manifest['contract']='runtime-only year/date availability extension; no formula/window/prior changes'
+          (out/'runtime_patch_manifest.json').write_text(json.dumps(manifest,indent=2))
+          print(json.dumps(manifest,indent=2))
+          PY
+
+      - name: Build authorized trusted 2015-2025 core holdout matrix
+        run: python trusted_v12/rebuild_v12_2025_holdout.py
+
+      - name: Add frozen 20 QoC features through strict pregame 2025 history
+        run: python trusted_v12/augment_qoc_2025_holdout.py
+
+      - name: Verify exact 73-feature contract and temporal holdout surface
+        run: |
+          python - <<'PY'
+          import hashlib,json,pandas as pd
+          frozen=json.load(open('/workspace/hr_model/holdout_2025/frozen_73_feature_list_pre_acquisition.json'))
+          live=json.load(open('/workspace/hr_model/features/v1.2_2025_holdout/feature_list.json'))
+          assert live==frozen, 'holdout active feature names/order differ from pre-acquisition frozen reference'
+          assert len(live)==73
+          d=pd.read_parquet('/workspace/hr_model/features/v1.2_2025_holdout/game_features.parquet')
+          assert set(d.year.unique())==set(range(2015,2026))
+          assert set(d.loc[d.year<=2023,'split'])=={'fit'}
+          assert set(d.loc[d.year==2024,'split'])=={'calibration'}
+          assert set(d.loc[d.year==2025,'split'])=={'holdout'}
+          h=d[d.year==2025]
+          assert len(h)>40000
+          assert h.groupby('game_pk').size().eq(18).all()
+          m=pd.to_datetime(h.max_as_of_date).notna()
+          assert (pd.to_datetime(h.loc[m,'max_as_of_date']) < pd.to_datetime(h.loc[m,'game_date'])).all()
+          fsha=hashlib.sha256(open('/workspace/hr_model/holdout_2025/frozen_73_feature_list_pre_acquisition.json','rb').read()).hexdigest()
+          lsha=hashlib.sha256(open('/workspace/hr_model/features/v1.2_2025_holdout/feature_list.json','rb').read()).hexdigest()
+          assert fsha==lsha
+          h.to_parquet('/workspace/hr_model/holdout_2025/2025_feature_matrix.parquet',index=False)
+          print({'feature_count':73,'feature_sha':lsha,'holdout_rows':len(h),'holdout_games':h.game_pk.nunique(),'asof_pass':True})
+          PY
+
+      - name: Execute frozen 2025 one-shot evaluator
+        run: |
+          python experiments/v12_evaluate_2025_one_shot.py \
+            --matrix /workspace/hr_model/features/v1.2_2025_holdout/game_features.parquet \
+            --feature-list /workspace/hr_model/features/v1.2_2025_holdout/feature_list.json \
+            --contract experiments/contracts/v12_full73_aggressive.json \
+            --out-dir /workspace/hr_model/holdout_2025 \
+            --reps 10000
+
+      - name: Verify frozen post-run contract
+        run: |
+          python - <<'PY'
+          import json,os
+          p=json.load(open('/workspace/hr_model/holdout_2025/01_primary_2025_top5.json'))
+          c=json.load(open('/workspace/hr_model/holdout_2025/02_complete_2025_result.json'))
+          f=c['freeze']
+          assert p['year']==2025
+          assert p['n_slate_dates']>=150
+          assert f['fit_years']=='2015-2023'
+          assert f['calibration_year']==2024 and f['holdout_year']==2025
+          assert f['n_features']==73 and f['rounds']==194
+          assert f['posthoc_tuning_or_subgroup_selection'] is False
+          assert p['paired_bootstrap']['replicates']==10000
+          assert p['paired_bootstrap']['cluster']=='slate_date'
+          assert os.path.exists('/workspace/hr_model/holdout_2025/2025_predictions_and_outcomes.parquet')
+          print('FROZEN 2025 ONE-SHOT CONTRACT PASS; PRIMARY RESULT LOCKED')
+          PY
+
+      - name: Print frozen one-shot result
+        if: always()
+        run: |
+          python - <<'PY'
+          import json,os
+          for name in ['01_primary_2025_top5.json','02_complete_2025_result.json']:
+              p='/workspace/hr_model/holdout_2025/'+name
+              print('\n===== '+name+' =====')
+              if os.path.exists(p): print(json.dumps(json.load(open(p)),indent=2))
+              else: print('MISSING')
+          PY
+
+      - name: Upload one-shot evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v12-frozen-2025-one-shot
+          if-no-files-found: warn
+          path: |
+            work/hr_model/holdout_2025/*
+            work/hr_model/data/raw/pa_2025.parquet
+            work/hr_model/data/raw/bip_2025_trusted.parquet
+            work/hr_model/data/raw/holdout_2025_acquisition.json
+            work/hr_model/data/curated/game_context_2025_authorized.parquet
+            work/hr_model/features/v1.2_2025_holdout/feature_list.json
+            work/hr_model/features/v1.2_2025_holdout/_summary.json
