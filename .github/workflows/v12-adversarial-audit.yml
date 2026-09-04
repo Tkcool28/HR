@@ -1,0 +1,112 @@
+name: v1.2 adversarial audit
+
+on:
+  push:
+    branches:
+      - feat/v1.2-correction-audit
+    paths:
+      - '.github/workflows/v12-adversarial-audit.yml'
+  workflow_dispatch:
+
+jobs:
+  adversarial-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install audit dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'pandas==2.2.3' 'numpy>=1.26,<3' 'pyarrow>=16,<22'
+      - name: Reconstruct delivered v1.2 correction and split metadata
+        run: |
+          set -euxo pipefail
+          mkdir -p /tmp/v12meta delivered base
+          tar -xzf package_bundles/v1.2_correction/99_v12_manifest_reconstruction.tar.gz -C /tmp/v12meta
+          bash /tmp/v12meta/reconstruct_v12_correction.sh package_bundles/v1.2_correction delivered
+          tar -xzf package_bundles/01_curated_small_and_splits.tar.gz -C base
+      - name: Run adversarial diagnostics
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import numpy as np
+          import pandas as pd
+
+          root = Path('delivered/hr_model')
+          f = pd.read_parquet(root/'features/v1.2/game_features.parquet')
+          pa = pd.read_parquet(root/'data/curated/pa_v12.parquet')
+          flist = json.loads((root/'features/v1.2/feature_list.json').read_text())
+          train_ids = set(pd.read_parquet('base/data/splits/train_ids.parquet')['game_pk'].astype(int))
+          val_ids = set(pd.read_parquet('base/data/splits/val_ids.parquet')['game_pk'].astype(int))
+          union = train_ids | val_ids
+
+          print('=== TARGET UNIVERSE ===')
+          print('feature rows', len(f), 'unique games', f.game_pk.nunique())
+          print('rows/game', len(f)/f.game_pk.nunique())
+          print('rows/team-game approximate', len(f)/(2*f.game_pk.nunique()))
+          first = (pa.sort_values(['game_pk','batter_id','at_bat_number'])
+                     .groupby(['game_pk','batter_id'], sort=False).first().reset_index())
+          proxy = first[first['inning'].eq(1)].copy()
+          proxy['side'] = proxy['inning_topbot'].map({'Top':'away','Bot':'home'})
+          counts = proxy.groupby(['game_pk','side']).size()
+          print('proxy hitters/team-game quantiles', counts.quantile([0,.1,.25,.5,.75,.9,1]).to_dict())
+          print('proxy hitters/team-game value_counts', counts.value_counts().sort_index().to_dict())
+          print('team-games with 9 proxy hitters', int((counts==9).sum()), 'of', len(counts))
+          print('team-games with <=4 proxy hitters', int((counts<=4).sum()), 'of', len(counts))
+
+          print('\n=== SPLIT MEMBERSHIP ===')
+          gids = set(f.game_pk.astype(int))
+          outside = gids - union
+          print('feature games outside train+val ids', len(outside))
+          print('feature rows outside train+val ids', int((~f.game_pk.astype(int).isin(union)).sum()))
+          wrong_train_year = f[(f['split']=='train') & (pd.to_datetime(f.game_date).dt.year>=2023)]
+          wrong_val_year = f[(f['split']=='val') & (pd.to_datetime(f.game_date).dt.year<=2022)]
+          print('train rows dated 2023-2024', len(wrong_train_year))
+          print('val rows dated <=2022', len(wrong_val_year))
+          print('train/val id overlap', len(train_ids & val_ids))
+
+          print('\n=== LABEL / IDENTIFIER SANITY ===')
+          print('duplicate batter-game rows', int(f.duplicated(['batter_id','game_pk']).sum()))
+          print('HR rate overall/train/val', float(f.hr_in_game.mean()), float(f.loc[f.split=='train','hr_in_game'].mean()), float(f.loc[f.split=='val','hr_in_game'].mean()))
+          print('missing pitcher_id', int(f.pitcher_id.isna().sum()), 'missing batter_hand', int(f.batter_hand.isna().sum()), 'missing pitcher_hand', int(f.pitcher_hand.isna().sum()))
+
+          print('\n=== FEATURE HEALTH ===')
+          numeric = [c for c in flist if c in f.columns and pd.api.types.is_numeric_dtype(f[c])]
+          nonnumeric = [c for c in flist if c in f.columns and c not in numeric]
+          constants=[]; high_missing=[]; inf_cols=[]
+          for c in numeric:
+              s=f[c]
+              if s.nunique(dropna=False)<=1: constants.append(c)
+              miss=float(s.isna().mean())
+              if miss>=0.10: high_missing.append((c,round(miss,4)))
+              a=s.to_numpy(float, na_value=np.nan)
+              if np.isinf(a).any(): inf_cols.append(c)
+          print('numeric features', len(numeric), 'nonnumeric', nonnumeric)
+          print('constant features', constants)
+          print('>=10% missing', sorted(high_missing, key=lambda x:-x[1]))
+          print('inf features', inf_cols)
+
+          dup_pairs=[]
+          for i,a in enumerate(numeric):
+              sa=f[a]
+              for b in numeric[i+1:]:
+                  sb=f[b]
+                  if sa.equals(sb): dup_pairs.append((a,b))
+          print('exact duplicate numeric feature pairs', dup_pairs)
+
+          print('\n=== DEFAULT / COVERAGE POLICIES ===')
+          for c in ['park_hr_factor_3yr','park_hr_factor_by_hand']:
+              if c in f:
+                  byyr=f.assign(_year=pd.to_datetime(f.game_date).dt.year).groupby('_year')[c].apply(lambda s: float((s==100.0).mean()))
+                  print(c, 'share exactly 100 by year', byyr.to_dict())
+          if 'pitcher_top_pitch' in f:
+              byyr=f.assign(_year=pd.to_datetime(f.game_date).dt.year).groupby('_year')['pitcher_top_pitch'].apply(lambda s: float(s.fillna('').eq('').mean()))
+              print('no-history top-pitch share by year', byyr.to_dict())
+
+          print('\n=== YEAR / SPLIT COUNTS ===')
+          print(pd.crosstab(pd.to_datetime(f.game_date).dt.year, f['split']).to_string())
+          PY
