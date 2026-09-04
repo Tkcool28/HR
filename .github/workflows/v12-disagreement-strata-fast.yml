@@ -1,0 +1,87 @@
+name: v1.2 disagreement strata fast follow-up
+
+on:
+  push:
+    branches:
+      - feat/v1.2-trustworthy-rebuild
+    paths:
+      - 'experiments/v12_disagreement_strata_test.py'
+      - 'experiments/test_v12_disagreement_strata.py'
+      - '.github/workflows/v12-disagreement-strata-fast.yml'
+  workflow_dispatch:
+
+jobs:
+  disagreement-strata:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install inference dependencies
+        run: python -m pip install 'numpy>=1.26,<3' 'pandas>=2.2,<3' 'pyarrow>=16,<22'
+
+      - name: Download frozen edge artifact from successful run 33877537006
+        uses: actions/download-artifact@v4
+        with:
+          name: v12-frozen-real-tail-bootstrap
+          path: frozen
+          github-token: ${{ github.token }}
+          repository: Tkcool28/HR
+          run-id: 33877537006
+
+      - name: Locate and verify frozen edge evidence
+        run: |
+          set -euxo pipefail
+          find frozen -maxdepth 4 -type f -print | sort
+          EDGE=$(find frozen -type f -name 'full73_edge_localization.parquet' -print -quit)
+          test -n "$EDGE"
+          echo "EDGE=$EDGE" >> "$GITHUB_ENV"
+          python - <<'PY'
+          import os, pandas as pd
+          f=pd.read_parquet(os.environ['EDGE'])
+          assert len(f)==86112, len(f)
+          assert f.year.isin([2023,2024]).all()
+          assert not f.duplicated(['game_pk','batter_id']).any()
+          assert {'model_top4','obvious_top4','obvious_rank','hr_in_game'}.issubset(f.columns)
+          print('frozen edge evidence PASS; 2025 NOT READ')
+          PY
+
+      - name: Run multiplicity-aware disagreement follow-up
+        run: |
+          mkdir -p out
+          python experiments/v12_disagreement_strata_test.py \
+            --input "$EDGE" \
+            --out out/full73_disagreement_strata.json \
+            --reps 10000 \
+            --perm-reps 10000 \
+            --seed 20260904
+
+      - name: Verify result contract
+        run: |
+          python - <<'PY'
+          import json
+          p=json.load(open('out/full73_disagreement_strata.json'))
+          assert p['design']['bootstrap_replicates']==10000
+          assert p['design']['randomization_replicates']==10000
+          assert p['design']['holdout_2025_read'] is False
+          assert set(p['combined_2023_2024'])=={
+            'obvious_rank_5_8','obvious_rank_9_16','obvious_rank_17_plus'
+          }
+          for k,v in p['combined_2023_2024'].items():
+              assert 'holm_adjusted_p_across_3_strata' in v['within_date_randomization']
+          print('disagreement result PASS; 2025 NOT READ')
+          PY
+
+      - name: Print result
+        run: cat out/full73_disagreement_strata.json
+
+      - name: Upload disagreement evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v12-full73-disagreement-strata
+          if-no-files-found: error
+          path: out/full73_disagreement_strata.json
