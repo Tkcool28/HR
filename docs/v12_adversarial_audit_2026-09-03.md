@@ -62,6 +62,36 @@ Historical game-HR rate differs materially between the selected and excluded fir
 
 This is a major target-sampling/selection-bias defect. It is not caught by the delivered 35-check temporal suite.
 
+## Major defect: postseason games inside the nominal regular-season universe
+
+The package documentation/acquisition path describes the model data as regular-season (`game_type=R`) history, but the delivered curated game table, PA table, splits, and final v1.2 feature matrix contain postseason games.
+
+A deliberately conservative audit counted only games dated **October 8 or later**, which is safely inside the postseason for every 2015-2024 season. Even with that conservative cutoff:
+
+- `game.parquet`: 275 definitely-postseason games
+- `pa_v12.parquet`: 20,863 PA rows from those 275 games
+- `features/v1.2/game_features.parquet`: 2,367 model target rows from those 275 games
+- latest included game date: 2024-10-30
+
+Definitely-postseason games are present in every year 2015-2024. Counts using the Oct-08 lower bound are:
+
+| Year | Games |
+|---:|---:|
+| 2015 | 34 |
+| 2016 | 26 |
+| 2017 | 28 |
+| 2018 | 21 |
+| 2019 | 21 |
+| 2020 | 25 |
+| 2021 | 32 |
+| 2022 | 33 |
+| 2023 | 29 |
+| 2024 | 26 |
+
+This is a lower bound; Wild Card/Division Series games played before October 8 are not counted by this diagnostic. The final model therefore trains/validates on a mixed regular-season/postseason target population despite the stated regular-season scope.
+
+This is not merely harmless postseason history being available to future rolling features: the postseason games themselves are prediction targets inside train/validation. If the intended product is regular-season HR betting, this changes the modeled/evaluated population and should be corrected or explicitly justified.
+
 ## Split assignment
 
 Source robustness issue: the builder initializes every target row as `train` and only overwrites known validation IDs. Unknown game IDs would therefore silently become training rows rather than failing closed.
@@ -181,4 +211,4 @@ However, the delivered acquisition logs report `0 still capped after re-chunking
 
 ## Current audit verdict
 
-The v1.2 correction substantially improves the temporal feature engine and correctly repairs the pitch-usage/top-pitch bug. The code is reproducible from historical inputs and the rebuilt feature matrix is structurally healthy. However, the batting-universe proxy is a critical conceptual defect that materially changes the sampled population; historical venue identity is also wrong for known stadium changes and special-site games; the active feature list is not trainer-compatible; the inherited training/evaluation architecture reuses the 2023-2024 validation block too aggressively to support clean calibrated-performance claims; and the v1.2 repair materially changes the feature surface, so it is not a controlled apples-to-apples repair of v1.1. No model performance claim should be accepted from this v1.2 matrix until the target-universe and park-identity issues are repaired and the evaluation design separates tuning, calibration fitting, and final assessment.
+The v1.2 correction substantially improves the temporal feature engine and correctly repairs the pitch-usage/top-pitch bug. The code is reproducible from historical inputs and the rebuilt feature matrix is structurally healthy. However, the batting-universe proxy is a critical conceptual defect that materially changes the sampled population; definitely-postseason games are included as train/validation targets despite the nominal regular-season scope; historical venue identity is wrong for known stadium changes and special-site games; the active feature list is not trainer-compatible; the inherited training/evaluation architecture reuses the 2023-2024 validation block too aggressively to support clean calibrated-performance claims; and the v1.2 repair materially changes the feature surface, so it is not a controlled apples-to-apples repair of v1.1. No model performance claim should be accepted from this v1.2 matrix until the target-universe, game-scope, and park-identity issues are repaired and the evaluation design separates tuning, calibration fitting, and final assessment.
