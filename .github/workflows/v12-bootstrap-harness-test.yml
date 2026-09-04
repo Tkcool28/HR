@@ -9,6 +9,8 @@ on:
       - 'experiments/test_v12_paired_tail_bootstrap.py'
       - 'experiments/v12_edge_localization.py'
       - 'experiments/test_v12_edge_localization.py'
+      - 'experiments/v12_disagreement_strata_test.py'
+      - 'experiments/test_v12_disagreement_strata.py'
       - '.github/workflows/v12-bootstrap-harness-test.yml'
   workflow_dispatch:
 
@@ -24,4 +26,4 @@ jobs:
       - name: Install bootstrap test dependencies
         run: python -m pip install 'numpy>=1.26,<3' 'pandas>=2.2,<3' 'pyarrow>=16,<22' 'pytest>=8,<9'
       - name: Run bootstrap and edge synthetic controls
-        run: pytest -q experiments/test_v12_paired_tail_bootstrap.py experiments/test_v12_edge_localization.py
+        run: pytest -q experiments/test_v12_paired_tail_bootstrap.py experiments/test_v12_edge_localization.py experiments/test_v12_disagreement_strata.py
