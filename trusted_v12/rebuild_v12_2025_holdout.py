@@ -55,6 +55,10 @@ def postprocess(ctx):
     hist=hist[hist.game_date.dt.year.between(2015,2024)].copy()
     hist=hist[hist.game_pk.astype(int).isin(ids)].copy()
     hist['park_id']=hist.game_pk.astype(int).map(venue).astype('int64')
+    if 'at_bat_number' not in hist.columns:
+        raise RuntimeError('historical BIP source missing at_bat_number; cannot enforce frozen BIP grain')
+    if hist.duplicated(['game_pk','at_bat_number']).any():
+        raise RuntimeError('historical regular-season BIP grain duplicate')
     hist.to_parquet(RAW/'bip_all.parquet',index=False)
     base.run(Path(__file__).resolve().parent/'process_park_factors_2025_holdout.py')
     pf=pd.read_parquet(CUR/'park_factors_v12.parquet')
@@ -67,9 +71,13 @@ def postprocess(ctx):
     if not b25.game_date.dt.year.eq(2025).all(): raise RuntimeError('2025 BIP year violation')
     b25=b25[b25.game_pk.astype(int).isin(ids)].copy()
     b25['park_id']=b25.game_pk.astype(int).map(venue).astype('int64')
+    if 'at_bat_number' not in b25.columns:
+        raise RuntimeError('2025 BIP source missing at_bat_number')
+    if b25.duplicated(['game_pk','at_bat_number']).any():
+        raise RuntimeError('2025 BIP grain duplicate')
     combined=pd.concat([hist,b25],ignore_index=True,sort=False)
-    if combined.duplicated(['game_pk','batter','pitcher','game_date']).all():
-        raise RuntimeError('unexpected pathological BIP duplication')
+    if combined.duplicated(['game_pk','at_bat_number']).any():
+        raise RuntimeError('combined BIP grain duplicate')
     combined.to_parquet(RAW/'bip_all.parquet',index=False)
     return pa,starters,pl,pf
 
