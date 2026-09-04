@@ -70,7 +70,8 @@ def test_date_cluster_bootstrap_detects_known_positive_delta():
 def test_game_cluster_sensitivity_detects_known_positive_delta():
     # Exercise the secondary path that resamples whole 18-batter game clusters
     # inside each slate, matching the game-resampling suggestion directly.
-    a, b = synthetic_pair(n_days=20)
+    # Use the same >=100-slate minimum required by the real sensitivity run.
+    a, b = synthetic_pair(n_days=120)
     a, b = boot.validate_pair(a, b)
     result = boot.bootstrap_games_within_days(
         a,
