@@ -3,18 +3,23 @@ import argparse, json, math
 from pathlib import Path
 import pandas as pd
 
+PROP_START = pd.Timestamp('2023-05-03')
+
 
 def summarize(df: pd.DataFrame, year: int):
     d=df.copy()
+    d['game_date']=pd.to_datetime(d['game_date'])
     if 'year' in d.columns:
         d=d[d['year'].astype(int)==year]
-    elif 'game_date' in d.columns:
-        d=d[pd.to_datetime(d['game_date']).dt.year==year]
+    else:
+        d=d[d['game_date'].dt.year==year]
+    if year == 2023:
+        d=d[d['game_date'] >= PROP_START]
     rank_col='model_rank' if 'model_rank' in d.columns else None
     if rank_col is None and 'raw_rank' in d.columns: rank_col='raw_rank'
     if rank_col is None:
         raise RuntimeError('No model rank column found')
-    out={'year':year,'rows':len(d),'slates':int(pd.to_datetime(d['game_date']).dt.date.nunique())}
+    out={'year':year,'rows':len(d),'slates':int(d['game_date'].dt.date.nunique()),'availability_start':str(d['game_date'].min().date()) if len(d) else None}
     for n in (1,2,4,8):
         x=d[d[rank_col].astype(float)<=n]
         out[f'top{n}_picks']=len(x)
@@ -42,10 +47,8 @@ def main():
     a=ap.parse_args()
     h=pd.read_parquet(a.historical)
     q=pd.read_parquet(a.holdout)
-    rows=[]
-    for y in (2023,2024): rows.append(summarize(h,y))
-    rows.append(summarize(q,2025))
-    result={'years':rows,'combined':{}}
+    rows=[summarize(h,2023), summarize(h,2024), summarize(q,2025)]
+    result={'player_prop_history_start':'2023-05-03','years':rows,'combined':{}}
     for key in ['top1_unique_games','top2_unique_games','top4_unique_games','top8_unique_games','top5pct_unique_games','union_model_obvious_top5_unique_games']:
         vals=[r.get(key) for r in rows]
         if all(v is not None for v in vals):
