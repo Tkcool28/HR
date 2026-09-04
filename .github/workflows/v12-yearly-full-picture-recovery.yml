@@ -1,0 +1,89 @@
+name: v1.2 2019-2025 full-picture artifact recovery
+
+on:
+  push:
+    branches:
+      - feat/v1.2-trustworthy-rebuild
+    paths:
+      - '.github/workflows/v12-yearly-full-picture-recovery.yml'
+  workflow_dispatch:
+
+jobs:
+  full-picture-recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      HIST_ARTIFACT_ID: '9952010153'
+      HIST_ARTIFACT_SHA256: '2a1236c79053d360a540408dfe41e5f82c16c8172b0f158cfbfe2094fb6c51b5'
+      HOLDOUT_ARTIFACT_ID: '9951133562'
+      HOLDOUT_ARTIFACT_SHA256: '3b42f6a80944f53247cb400e7e0be0bf5ac407439ae402fc68bbf034ca06ddec'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install reporting dependencies
+        run: python -m pip install 'pandas==2.2.3' 'numpy>=1.26,<3' 'pyarrow>=16,<22'
+
+      - name: Download and verify immutable historical and holdout artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          rm -rf hist_art hold_art out hist.zip hold.zip
+          mkdir -p hist_art hold_art out
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${HIST_ARTIFACT_ID}/zip" > hist.zip
+          echo "${HIST_ARTIFACT_SHA256}  hist.zip" | sha256sum -c -
+          unzip -q hist.zip -d hist_art
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${HOLDOUT_ARTIFACT_ID}/zip" > hold.zip
+          echo "${HOLDOUT_ARTIFACT_SHA256}  hold.zip" | sha256sum -c -
+          unzip -q hold.zip -d hold_art
+          find hist_art -maxdepth 3 -type f | sort
+          find hold_art -maxdepth 3 -type f | sort
+          test -f hist_art/full_picture/historical_migration.json
+          test -f hist_art/full_picture/historical_scored.parquet
+          test -f hold_art/holdout_2025/2025_predictions_and_outcomes.parquet
+          test -f hold_art/holdout_2025/02_complete_2025_result.json
+
+      - name: Build final careful 2019-2025 picture
+        run: |
+          python experiments/v12_yearly_full_picture.py \
+            --historical-scored hist_art/full_picture/historical_scored.parquet \
+            --historical-json hist_art/full_picture/historical_migration.json \
+            --holdout-predictions hold_art/holdout_2025/2025_predictions_and_outcomes.parquet \
+            --holdout-result hold_art/holdout_2025/02_complete_2025_result.json \
+            --out-json out/yearly_full_picture.json \
+            --out-year-csv out/yearly_full_picture.csv \
+            --out-rank-csv out/exact_rank_1_to_8.csv \
+            --out-consistency-json out/obvious_proxy_consistency_audit.json
+
+      - name: Verify full-picture contract
+        run: |
+          python - <<'PY'
+          import json,pandas as pd
+          p=json.load(open('out/yearly_full_picture.json'))
+          c=p['comparator_consistency']
+          assert c['verdict']=='CONSISTENT_NO_COMPARATOR_CORRECTION_REQUIRED'
+          assert c['same_definition'] is True
+          assert len(p['design']['obvious_proxy'])==5
+          y={int(z['year']):z for z in p['yearly']}
+          assert set(y)==set(range(2019,2026))
+          assert abs(y[2025]['full73_top5_hr_rate']-515/2276)<1e-12
+          assert abs(y[2025]['obvious5_top5_hr_rate']-482/2276)<1e-12
+          assert abs(y[2025]['top4_per_day_hr_rate']-190/736)<1e-12
+          r=pd.read_csv('out/exact_rank_1_to_8.csv')
+          assert len(r[r.scope.astype(str).eq('POOLED_2019_2025')])==8
+          print('FULL PICTURE RECOVERY PASS; FROZEN 2025 RESULT REPRODUCED')
+          PY
+
+      - name: Print final result
+        run: cat out/yearly_full_picture.json
+
+      - name: Upload final evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v12-2019-2025-full-picture-final
+          if-no-files-found: error
+          path: out/*
