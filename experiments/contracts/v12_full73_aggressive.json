@@ -1,0 +1,20 @@
+{
+  "model": "full73_aggressive_reference",
+  "feature_count": 73,
+  "best_params": {
+    "max_depth": 4,
+    "min_child_weight": 1.5470025855927074,
+    "subsample": 0.714715411256542,
+    "colsample_bytree": 0.8457664821163214,
+    "reg_alpha": 8.399022165477417,
+    "reg_lambda": 3.372579512897184,
+    "eta": 0.028193503897872348,
+    "gamma": 2.43210710108499
+  },
+  "best_round": 194,
+  "tuning_design": "50 TPE trials; expanding chronological score years 2019, 2020, 2021; mean fold Brier",
+  "calibration_year": 2022,
+  "development_assessment": "2023-2024",
+  "sealed_final_holdout": 2025,
+  "holdout_2025_read": false
+}
