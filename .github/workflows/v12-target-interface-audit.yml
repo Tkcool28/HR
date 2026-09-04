@@ -1,0 +1,84 @@
+name: v1.2 target and interface audit
+
+on:
+  push:
+    branches: [feat/v1.2-correction-audit]
+    paths: ['.github/workflows/v12-target-interface-audit.yml']
+  workflow_dispatch:
+
+jobs:
+  target-interface:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'pandas==2.2.3' 'numpy>=1.26,<3' 'pyarrow>=16,<22'
+      - name: Reconstruct audit inputs
+        run: |
+          set -euxo pipefail
+          mkdir -p /tmp/v12meta delivered base
+          tar -xzf package_bundles/v1.2_correction/99_v12_manifest_reconstruction.tar.gz -C /tmp/v12meta
+          bash /tmp/v12meta/reconstruct_v12_correction.sh package_bundles/v1.2_correction delivered
+          tar -xzf package_bundles/01_curated_small_and_splits.tar.gz -C base
+      - name: Target universe and interface diagnostics
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import pandas as pd
+          import numpy as np
+
+          root=Path('delivered/hr_model')
+          pa=pd.read_parquet(root/'data/curated/pa_v12.parquet')
+          f=pd.read_parquet(root/'features/v1.2/game_features.parquet')
+          starters=pd.read_parquet(root/'data/curated/game_starters_v12.parquet')
+          games=pd.read_parquet('base/data/curated/game.parquet')
+          train=set(pd.read_parquet('base/data/splits/train_ids.parquet').game_pk.astype(int))
+          val=set(pd.read_parquet('base/data/splits/val_ids.parquet').game_pk.astype(int))
+
+          print('=== GAME COVERAGE ===')
+          sids=set(starters.game_pk.astype(int)); gids=set(games.game_pk.astype(int)); fids=set(f.game_pk.astype(int)); splitids=train|val
+          print('starter games',len(sids),'game metadata',len(gids),'feature games',len(fids),'split games',len(splitids))
+          print('split games missing game metadata',len(splitids-gids))
+          print('starter games missing game metadata',len(sids-gids))
+          print('game metadata missing final features',len(gids-fids))
+
+          print('\n=== FIRST-NINE BENCHMARK ===')
+          p=pa.sort_values(['game_pk','inning','at_bat_number']).copy()
+          # first appearance of each batter in game; inning_topbot identifies side
+          first=(p.sort_values(['game_pk','at_bat_number'])
+                   .groupby(['game_pk','batter_id'],sort=False).first().reset_index())
+          first['side']=first['inning_topbot'].map({'Top':'away','Bot':'home'})
+          first=first.dropna(subset=['side']).sort_values(['game_pk','side','at_bat_number'])
+          first['appearance_slot']=first.groupby(['game_pk','side']).cumcount()+1
+          nine=first[first.appearance_slot<=9].copy()
+          nine['proxy_included']=nine['inning'].eq(1)
+          print('first-nine rows',len(nine),'expected max',2*9*len(gids))
+          slot=nine.groupby('appearance_slot').agg(n=('proxy_included','size'), included=('proxy_included','sum'))
+          slot['share']=slot.included/slot.n
+          print(slot.to_string())
+          print('overall first-nine proxy inclusion share',float(nine.proxy_included.mean()))
+          print('first-nine team-games with exactly 9 observed',int((nine.groupby(['game_pk','side']).size()==9).sum()))
+
+          # Historical label for first nine, independent of proxy selection.
+          hr=pa.groupby(['game_pk','batter_id'],as_index=False).is_hr.max().rename(columns={'is_hr':'hr'})
+          nine=nine.merge(hr,on=['game_pk','batter_id'],how='left')
+          print('HR rate first-nine overall',float(nine.hr.mean()))
+          print('HR rate proxy-included',float(nine.loc[nine.proxy_included,'hr'].mean()))
+          print('HR rate proxy-excluded',float(nine.loc[~nine.proxy_included,'hr'].mean()))
+          print('HR rate by appearance slot')
+          print(nine.groupby('appearance_slot').hr.mean().to_string())
+
+          print('\n=== ACTIVE FEATURE INTERFACE ===')
+          flist=json.loads((root/'features/v1.2/feature_list.json').read_text())
+          print('active feature count',len(flist))
+          print('non-numeric active features',[c for c in flist if not pd.api.types.is_numeric_dtype(f[c])])
+          try:
+              f[flist].astype('float32')
+              print('PASS existing numeric-matrix contract')
+          except Exception as e:
+              print('FAIL existing numeric-matrix contract:',type(e).__name__,str(e))
+          PY
