@@ -1,0 +1,133 @@
+name: v1.2 yearly contextual migration predeclared test
+
+on:
+  push:
+    branches:
+      - feat/v1.2-trustworthy-rebuild
+    paths:
+      - 'experiments/v12_yearly_context_migration.py'
+      - 'experiments/test_v12_yearly_context_migration.py'
+      - 'experiments/contracts/v12_full73_aggressive.json'
+      - 'docs/v12_yearly_context_migration_precommit_2026-09-04.md'
+      - '.github/workflows/v12-yearly-context-migration.yml'
+  workflow_dispatch:
+
+jobs:
+  yearly-context-migration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            'pandas==2.2.3' 'numpy>=1.26,<3' 'pyarrow>=16,<22' \
+            'requests>=2.32,<3' 'scikit-learn>=1.5,<2' \
+            'xgboost>=2.1,<4'
+
+      - name: Run synthetic migration controls
+        run: python experiments/test_v12_yearly_context_migration.py
+
+      - name: Reconstruct trusted 2015-2024 inputs
+        run: |
+          set -euxo pipefail
+          rm -rf work
+          mkdir -p work/hr_model
+          tar -xzf package_bundles/v1.2_correction/00_v12_code_tests_reports.tar.gz -C work
+          tar -xzf package_bundles/03_raw_pa_2015_2017.tar.gz -C work/hr_model
+          tar -xzf package_bundles/04_raw_pa_2018_2020.tar.gz -C work/hr_model
+          tar -xzf package_bundles/05_raw_pa_2021_2024.tar.gz -C work/hr_model
+          tar -xzf package_bundles/02_bip_all.tar.gz -C work/hr_model
+          tar -xzf package_bundles/01_curated_small_and_splits.tar.gz -C work/hr_model \
+            data/curated/game.parquet \
+            data/splits/train_ids.parquet \
+            data/splits/val_ids.parquet
+          test ! -e work/hr_model/data/splits/holdout_ids.parquet
+          test ! -e work/hr_model/models/holdout_predictions.parquet
+          cp trusted_v12/process_park_factors_trusted.py work/hr_model/src/data/process_park_factors_v12.py
+          sudo mkdir -p /workspace
+          sudo rm -rf /workspace/hr_model
+          sudo ln -s "$GITHUB_WORKSPACE/work/hr_model" /workspace/hr_model
+
+      - name: Rebuild frozen trusted 73-feature matrix
+        run: |
+          python trusted_v12/rebuild_v12_trusted.py
+          python trusted_v12/augment_qoc_trusted.py
+          python - <<'PY'
+          import json, pandas as pd
+          root='/workspace/hr_model'
+          cols=json.load(open(root+'/features/v1.2_trusted/feature_list.json'))
+          assert len(cols)==73, len(cols)
+          d=pd.read_parquet(root+'/features/v1.2_trusted/game_features.parquet', columns=['year','game_pk','batter_id'])
+          assert d.year.between(2015,2024).all()
+          assert 2025 not in set(d.year.astype(int))
+          assert not d.duplicated(['game_pk','batter_id']).any()
+          print('migration source PASS; 2025 NOT READ')
+          PY
+
+      - name: Run six-season walk-forward migration analysis
+        run: |
+          mkdir -p /workspace/hr_model/migration
+          python experiments/v12_yearly_context_migration.py \
+            --contract experiments/contracts/v12_full73_aggressive.json \
+            --out-json /workspace/hr_model/migration/yearly_context_migration.json \
+            --out-year-csv /workspace/hr_model/migration/yearly_context_migration.csv \
+            --out-context-csv /workspace/hr_model/migration/yearly_context_mechanisms.csv \
+            --out-parquet /workspace/hr_model/migration/yearly_context_scored.parquet \
+            --reps 10000 \
+            --seed 20260904
+
+      - name: Verify frozen migration contract
+        run: |
+          python - <<'PY'
+          import json
+          p=json.load(open('/workspace/hr_model/migration/yearly_context_migration.json'))
+          d=p['design']
+          assert d['years']==[2019,2020,2021,2022,2023,2024]
+          assert d['selector']=='daily raw-score top 5%'
+          assert d['bootstrap_replicates']==10000
+          assert d['primary_includes_2020'] is True
+          assert d['predeclared_ex2020_sensitivity'] is True
+          assert d['fixed_rank_buckets_analyzed'] is False
+          assert d['calendar_month_outcomes_emitted'] is False
+          assert d['holdout_2025_read'] is False
+          assert set(map(int,p['yearly'].keys()))=={2019,2020,2021,2022,2023,2024}
+          for y,z in p['walk_forward_fit_metrics'].items():
+              assert z['train_year_max']==int(y)-1
+          print('yearly migration contract PASS; 2025 NOT READ; no threshold buckets')
+          PY
+
+      - name: Print compact migration result
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          path='/workspace/hr_model/migration/yearly_context_migration.json'
+          if not os.path.exists(path):
+              print('migration result missing')
+              raise SystemExit(0)
+          p=json.load(open(path))
+          print(json.dumps({
+            'design': p['design'],
+            'yearly': p['yearly'],
+            'trend': p['trend'],
+            'context_mechanism_trends': p['context_mechanism_trends'],
+          }, indent=2))
+          PY
+
+      - name: Upload migration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v12-yearly-context-migration
+          if-no-files-found: error
+          path: |
+            work/hr_model/migration/*.json
+            work/hr_model/migration/*.csv
+            work/hr_model/migration/*.parquet
