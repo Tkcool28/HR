@@ -83,11 +83,17 @@ jobs:
           }
           JSON
 
-      - name: Run frozen feature-family ablations
+      - name: Run broad feature-family ablations
         run: python experiments/v12_feature_family_ablations.py
 
-      - name: Run daily-slate ranking diagnostics
+      - name: Run broad daily-slate rankings
         run: python experiments/v12_daily_ranking_diagnostics.py
+
+      - name: Run fine-grained subfamily ablations
+        run: python experiments/v12_feature_subfamily_ablations.py
+
+      - name: Run fine-grained daily-slate rankings
+        run: python experiments/v12_subfamily_daily_rankings.py
 
       - name: Upload ablation evidence
         if: always()
@@ -100,3 +106,7 @@ jobs:
             work/hr_model/models/v1.2_ablations/*.csv
             work/hr_model/models/v1.2_ablations/*.parquet
             work/hr_model/models/v1.2_ablations/*.md
+            work/hr_model/models/v1.2_subablations/*.json
+            work/hr_model/models/v1.2_subablations/*.csv
+            work/hr_model/models/v1.2_subablations/*.parquet
+            work/hr_model/models/v1.2_subablations/*.md
