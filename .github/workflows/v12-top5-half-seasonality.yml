@@ -1,0 +1,156 @@
+name: v1.2 top5 half-seasonality predeclared test
+
+on:
+  push:
+    branches:
+      - feat/v1.2-trustworthy-rebuild
+    paths:
+      - 'experiments/v12_top5_half_seasonality.py'
+      - 'experiments/test_v12_top5_half_seasonality.py'
+      - 'docs/v12_dynamic_bucket_regime_precommit_2026-09-04.md'
+      - 'docs/v12_top5_half_maturity_thresholds_precommit_2026-09-04.md'
+      - '.github/workflows/v12-top5-half-seasonality.yml'
+  workflow_dispatch:
+
+jobs:
+  top5-half-seasonality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            'pandas==2.2.3' 'numpy>=1.26,<3' 'pyarrow>=16,<22' \
+            'requests>=2.32,<3' 'scikit-learn>=1.5,<2' \
+            'xgboost>=2.1,<4'
+
+      - name: Run synthetic seasonality controls
+        run: python experiments/test_v12_top5_half_seasonality.py
+
+      - name: Reconstruct trusted 2015-2024 inputs
+        run: |
+          set -euxo pipefail
+          rm -rf work
+          mkdir -p work/hr_model
+          tar -xzf package_bundles/v1.2_correction/00_v12_code_tests_reports.tar.gz -C work
+          tar -xzf package_bundles/03_raw_pa_2015_2017.tar.gz -C work/hr_model
+          tar -xzf package_bundles/04_raw_pa_2018_2020.tar.gz -C work/hr_model
+          tar -xzf package_bundles/05_raw_pa_2021_2024.tar.gz -C work/hr_model
+          tar -xzf package_bundles/02_bip_all.tar.gz -C work/hr_model
+          tar -xzf package_bundles/01_curated_small_and_splits.tar.gz -C work/hr_model \
+            data/curated/game.parquet \
+            data/splits/train_ids.parquet \
+            data/splits/val_ids.parquet
+          test ! -e work/hr_model/data/splits/holdout_ids.parquet
+          test ! -e work/hr_model/models/holdout_predictions.parquet
+          cp trusted_v12/process_park_factors_trusted.py work/hr_model/src/data/process_park_factors_v12.py
+          sudo mkdir -p /workspace
+          sudo rm -rf /workspace/hr_model
+          sudo ln -s "$GITHUB_WORKSPACE/work/hr_model" /workspace/hr_model
+
+      - name: Rebuild frozen trusted 73-feature matrix
+        run: |
+          python trusted_v12/rebuild_v12_trusted.py
+          python trusted_v12/augment_qoc_trusted.py
+          python - <<'PY'
+          import json, pandas as pd
+          root='/workspace/hr_model'
+          cols=json.load(open(root+'/features/v1.2_trusted/feature_list.json'))
+          assert len(cols)==73, len(cols)
+          d=pd.read_parquet(root+'/features/v1.2_trusted/game_features.parquet', columns=['year','game_pk','batter_id'])
+          assert d.year.between(2015,2024).all()
+          assert 2025 not in set(d.year.astype(int))
+          assert not d.duplicated(['game_pk','batter_id']).any()
+          print('full73 source PASS; 2025 NOT READ')
+          PY
+
+      - name: Re-score frozen full73 champion
+        run: |
+          mkdir -p /workspace/hr_model/seasonality
+          python experiments/v12_score_frozen_tail_model.py \
+            --feature-list /workspace/hr_model/features/v1.2_trusted/feature_list.json \
+            --contract experiments/contracts/v12_full73_aggressive.json \
+            --label full73_aggressive \
+            --out /workspace/hr_model/seasonality/full73_predictions.parquet
+
+      - name: Rebuild frozen obvious-power proxy
+        run: |
+          python experiments/v12_edge_localization.py \
+            --predictions /workspace/hr_model/seasonality/full73_predictions.parquet \
+            --out-json /workspace/hr_model/seasonality/edge_localization_support.json \
+            --out-parquet /workspace/hr_model/seasonality/edge_localization_support.parquet \
+            --baseline-out /workspace/hr_model/seasonality/obvious_power_proxy_predictions.parquet \
+            --reps 1000 \
+            --seed 20260904
+
+      - name: Run predeclared half-season top5 inference and maturity audit
+        run: |
+          python experiments/v12_top5_half_seasonality.py \
+            --obvious /workspace/hr_model/seasonality/obvious_power_proxy_predictions.parquet \
+            --full73 /workspace/hr_model/seasonality/full73_predictions.parquet \
+            --features /workspace/hr_model/features/v1.2_trusted/game_features.parquet \
+            --feature-list /workspace/hr_model/features/v1.2_trusted/feature_list.json \
+            --out /workspace/hr_model/seasonality/top5_half_seasonality.json \
+            --maturity-csv /workspace/hr_model/seasonality/top5_half_feature_maturity.csv \
+            --reps 10000 \
+            --seed 20260904
+
+      - name: Verify frozen seasonality contract
+        run: |
+          python - <<'PY'
+          import json
+          p=json.load(open('/workspace/hr_model/seasonality/top5_half_seasonality.json'))
+          d=p['design']
+          assert d['primary_selector']=='daily raw-score top 5%'
+          assert d['calendar_month_outcomes_emitted'] is False
+          assert d['disagreement_buckets_analyzed'] is False
+          assert d['development_years']==[2023,2024]
+          assert d['bootstrap_replicates']==10000
+          assert d['holdout_2025_read'] is False
+          assert set(p['top5_phase_results'])=={'FIRST_HALF','SECOND_HALF'}
+          assert p['half_interaction']['definition']=='SECOND_HALF lift minus FIRST_HALF lift'
+          assert p['feature_maturity']['recent_feature_count'] > 0
+          print('top5 half-seasonality contract PASS; 2025 NOT READ; no monthly outcome table')
+          PY
+
+      - name: Print compact primary result
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          path='/workspace/hr_model/seasonality/top5_half_seasonality.json'
+          if not os.path.exists(path):
+              print('primary result missing')
+              raise SystemExit(0)
+          p=json.load(open(path))
+          print(json.dumps({
+            'design': p['design'],
+            'top5_phase_results': p['top5_phase_results'],
+            'half_interaction': p['half_interaction'],
+            'maturity_summary': {
+              phase: {
+                'n_full_slate_rows': z['n_full_slate_rows'],
+                'n_full73_top5_rows': z['n_full73_top5_rows'],
+                'base_hr_rate': z['base_hr_rate'],
+              } for phase,z in p['feature_maturity']['by_half'].items()
+            },
+          }, indent=2))
+          PY
+
+      - name: Upload seasonality evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v12-top5-half-seasonality
+          if-no-files-found: error
+          path: |
+            work/hr_model/seasonality/*.json
+            work/hr_model/seasonality/*.csv
+            work/hr_model/seasonality/*.parquet
