@@ -1,0 +1,135 @@
+name: v1.2 2019-2025 full-picture post-holdout audit
+
+on:
+  push:
+    branches:
+      - feat/v1.2-trustworthy-rebuild
+    paths:
+      - 'experiments/v12_yearly_full_picture.py'
+      - '.github/workflows/v12-yearly-full-picture.yml'
+  workflow_dispatch:
+
+jobs:
+  yearly-full-picture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      HOLDOUT_ARTIFACT_ID: '9951133562'
+      HOLDOUT_ARTIFACT_SHA256: '3b42f6a80944f53247cb400e7e0be0bf5ac407439ae402fc68bbf034ca06ddec'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            'pandas==2.2.3' 'numpy>=1.26,<3' 'pyarrow>=16,<22' \
+            'requests>=2.32,<3' 'scikit-learn>=1.5,<2' \
+            'xgboost>=2.1,<4'
+
+      - name: Reconstruct trusted historical 2015-2024 matrix
+        run: |
+          set -euxo pipefail
+          rm -rf work holdout_artifact holdout.zip
+          mkdir -p work/hr_model holdout_artifact
+          tar -xzf package_bundles/v1.2_correction/00_v12_code_tests_reports.tar.gz -C work
+          tar -xzf package_bundles/03_raw_pa_2015_2017.tar.gz -C work/hr_model
+          tar -xzf package_bundles/04_raw_pa_2018_2020.tar.gz -C work/hr_model
+          tar -xzf package_bundles/05_raw_pa_2021_2024.tar.gz -C work/hr_model
+          tar -xzf package_bundles/02_bip_all.tar.gz -C work/hr_model
+          tar -xzf package_bundles/01_curated_small_and_splits.tar.gz -C work/hr_model \
+            data/curated/game.parquet \
+            data/splits/train_ids.parquet \
+            data/splits/val_ids.parquet
+          test ! -e work/hr_model/data/raw/pa_2025.parquet
+          cp trusted_v12/process_park_factors_trusted.py work/hr_model/src/data/process_park_factors_v12.py
+          sudo mkdir -p /workspace
+          sudo rm -rf /workspace/hr_model
+          sudo ln -s "$GITHUB_WORKSPACE/work/hr_model" /workspace/hr_model
+          python trusted_v12/rebuild_v12_trusted.py
+          python trusted_v12/augment_qoc_trusted.py
+
+      - name: Run frozen six-season walk-forward scorer
+        run: |
+          mkdir -p /workspace/hr_model/full_picture
+          python experiments/v12_yearly_context_migration.py \
+            --contract experiments/contracts/v12_full73_aggressive.json \
+            --out-json /workspace/hr_model/full_picture/historical_migration.json \
+            --out-year-csv /workspace/hr_model/full_picture/historical_migration.csv \
+            --out-context-csv /workspace/hr_model/full_picture/historical_mechanisms.csv \
+            --out-parquet /workspace/hr_model/full_picture/historical_scored.parquet \
+            --reps 10000 --seed 20260904
+
+      - name: Download immutable sealed-2025 result artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${HOLDOUT_ARTIFACT_ID}/zip" > holdout.zip
+          echo "${HOLDOUT_ARTIFACT_SHA256}  holdout.zip" | sha256sum -c -
+          unzip -q holdout.zip -d holdout_artifact
+          test -f holdout_artifact/holdout_2025/2025_feature_matrix.parquet
+          test -f holdout_artifact/holdout_2025/2025_predictions_and_outcomes.parquet
+          test -f holdout_artifact/holdout_2025/02_complete_2025_result.json
+          echo 'SEALED 2025 ARTIFACT VERIFIED'
+
+      - name: Build careful 2019-2025 picture and correct comparator contract defect
+        run: |
+          python experiments/v12_yearly_full_picture.py \
+            --historical-scored /workspace/hr_model/full_picture/historical_scored.parquet \
+            --historical-json /workspace/hr_model/full_picture/historical_migration.json \
+            --historical-features /workspace/hr_model/features/v1.2_trusted/game_features.parquet \
+            --holdout-features holdout_artifact/holdout_2025/2025_feature_matrix.parquet \
+            --holdout-predictions holdout_artifact/holdout_2025/2025_predictions_and_outcomes.parquet \
+            --holdout-result holdout_artifact/holdout_2025/02_complete_2025_result.json \
+            --out-json /workspace/hr_model/full_picture/yearly_full_picture.json \
+            --out-year-csv /workspace/hr_model/full_picture/yearly_full_picture.csv \
+            --out-rank-csv /workspace/hr_model/full_picture/exact_rank_1_to_8.csv \
+            --out-correction-json /workspace/hr_model/full_picture/2025_obvious_comparator_correction.json
+
+      - name: Verify post-holdout reporting contract
+        run: |
+          python - <<'PY'
+          import json, pandas as pd
+          p=json.load(open('/workspace/hr_model/full_picture/yearly_full_picture.json'))
+          c=p['comparator_correction']
+          assert p['design']['historical_years']==[2019,2020,2021,2022,2023,2024]
+          assert p['design']['holdout_year']==2025
+          assert p['design']['no_reoptimization'] is True
+          assert len(p['design']['obvious_proxy'])==7
+          y={int(z['year']):z for z in p['yearly']}
+          assert set(y)==set(range(2019,2026))
+          assert abs(y[2025]['full73_top5_hr_rate'] - 515/2276) < 1e-12
+          assert abs(y[2025]['top4_per_day_hr_rate'] - 190/736) < 1e-12
+          assert c['correction_scope'].startswith('comparator only')
+          r=pd.read_csv('/workspace/hr_model/full_picture/exact_rank_1_to_8.csv')
+          pooled=r[r.scope.astype(str).eq('POOLED_2019_2025')]
+          assert set(pooled.exact_rank.astype(int))==set(range(1,9))
+          print('FULL PICTURE CONTRACT PASS; MODEL RESULTS UNCHANGED; COMPARATOR CORRECTION ISOLATED')
+          PY
+
+      - name: Print compact result
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          p='/workspace/hr_model/full_picture/yearly_full_picture.json'
+          if os.path.exists(p):
+              x=json.load(open(p))
+              print(json.dumps({'comparator_correction':x['comparator_correction'],'yearly':x['yearly'],'pooled_exact_rank_monotonicity':x['pooled_exact_rank_monotonicity']},indent=2))
+          PY
+
+      - name: Upload full-picture evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v12-2019-2025-full-picture
+          if-no-files-found: error
+          path: |
+            work/hr_model/full_picture/*.json
+            work/hr_model/full_picture/*.csv
+            work/hr_model/full_picture/*.parquet
