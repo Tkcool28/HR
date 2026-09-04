@@ -1,0 +1,76 @@
+name: v1.2 2025 BIP contract audit
+
+on:
+  push:
+    branches:
+      - feat/v1.2-trustworthy-rebuild
+    paths:
+      - '.github/workflows/v12-2025-bip-contract-audit.yml'
+  workflow_dispatch:
+
+jobs:
+  audit-bip-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install parquet deps
+        run: python -m pip install 'pandas==2.2.3' 'pyarrow>=16,<22' 'numpy>=1.26,<3'
+
+      - name: Extract 2024 raw and historical BIP only
+        run: |
+          set -euxo pipefail
+          rm -rf work
+          mkdir -p work/hr_model
+          tar -xzf package_bundles/05_raw_pa_2021_2024.tar.gz -C work/hr_model data/raw/pa_2024.parquet
+          tar -xzf package_bundles/02_bip_all.tar.gz -C work/hr_model
+
+      - name: Infer exact historical BIP rule on 2024
+        run: |
+          python - <<'PY'
+          import pandas as pd, numpy as np
+          raw=pd.read_parquet('work/hr_model/data/raw/pa_2024.parquet')
+          bip=pd.read_parquet('work/hr_model/data/raw/bip_all.parquet')
+          raw['game_date']=pd.to_datetime(raw.game_date)
+          bip['game_date']=pd.to_datetime(bip.game_date)
+          b=bip[bip.game_date.dt.year.eq(2024)].copy()
+          keys=['game_pk','at_bat_number']
+          target=set(map(tuple,b[keys].drop_duplicates().to_numpy()))
+          print('raw rows',len(raw),'bip2024 rows',len(b),'bip unique keys',len(target))
+          candidates={
+            'type_X': raw['type'].astype('string').eq('X') if 'type' in raw else pd.Series(False,index=raw.index),
+            'bb_type_nonnull': raw['bb_type'].notna() if 'bb_type' in raw else pd.Series(False,index=raw.index),
+            'events_nonnull': raw['events'].notna(),
+            'launch_speed_nonnull': raw['launch_speed'].notna() if 'launch_speed' in raw else pd.Series(False,index=raw.index),
+          }
+          for name,m in candidates.items():
+              c=set(map(tuple,raw.loc[m,keys].drop_duplicates().to_numpy()))
+              print(name,'rows',int(m.sum()),'keys',len(c),'target_missing',len(target-c),'extra',len(c-target),'jaccard',len(target&c)/max(1,len(target|c)))
+          # terminal event row per PA, then likely BIP event family
+          r=raw.sort_values(keys+['pitch_number']).dropna(subset=['at_bat_number'])
+          term=r.loc[r.groupby(keys)['pitch_number'].idxmax()].copy()
+          bip_events={
+            'single','double','triple','home_run','field_out','force_out',
+            'grounded_into_double_play','double_play','triple_play','field_error',
+            'fielders_choice','fielders_choice_out','sac_fly','sac_fly_double_play'
+          }
+          m=term.events.astype('string').isin(bip_events)
+          c=set(map(tuple,term.loc[m,keys].drop_duplicates().to_numpy()))
+          print('terminal_bip_events','rows',int(m.sum()),'keys',len(c),'target_missing',len(target-c),'extra',len(c-target),'jaccard',len(target&c)/max(1,len(target|c)))
+          # strongest expected equivalence: raw type X pitch rows
+          if 'type' in raw:
+              m=raw['type'].astype('string').eq('X')
+              c=raw.loc[m].copy()
+              ck=set(map(tuple,c[keys].drop_duplicates().to_numpy()))
+              if ck==target:
+                  print('BIP_RULE_EXACT=type_X')
+              elif set(map(tuple,term.loc[term['type'].astype('string').eq('X'),keys].drop_duplicates().to_numpy()))==target:
+                  print('BIP_RULE_EXACT=terminal_type_X')
+              else:
+                  print('BIP_RULE_EXACT=UNRESOLVED')
+          print('BIP_CONTRACT_AUDIT_NO_2025_READ')
+          PY
