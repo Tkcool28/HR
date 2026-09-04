@@ -1,0 +1,22 @@
+name: v1.2 2025 range extension audit
+on:
+  push:
+    branches: [feat/v1.2-trustworthy-rebuild]
+    paths: ['.github/workflows/v12-2025-range-extension-audit.yml']
+  workflow_dispatch:
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract correction source and inspect year guards
+        run: |
+          rm -rf work && mkdir -p work
+          tar -xzf package_bundles/v1.2_correction/00_v12_code_tests_reports.tar.gz -C work
+          for f in work/hr_model/src/data/build_pa_v12.py work/hr_model/src/data/build_pitch_level_v12.py work/hr_model/features/v1.2/build_features.py; do
+            echo "===== $f ====="
+            grep -nE -B3 -A3 '2015|2024|2025|HOLDOUT|range\(' "$f" | head -n 420 || true
+          done
+          echo '===== qoc guard ====='
+          grep -nE -B3 -A3 '2015|2024|2025|between' trusted_v12/qoc_features_trusted.py | head -n 160 || true
+          echo RANGE_EXTENSION_AUDIT_ONLY_NO_2025_DATA_READ
