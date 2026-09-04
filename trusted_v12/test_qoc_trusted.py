@@ -77,8 +77,11 @@ def test_qoc_rate_ranges_and_contact_ranges():
         assert f[c].between(0.0, 1.0).all(), c
     for c in [c for c in qoc if 'xwoba_on_contact' in c]:
         assert f[c].between(0.0, 2.0).all(), c
+    # Very soft contact and bunts can legitimately be below 40 mph, especially
+    # when a 30-day window has only one or two tracked BBE.  Reject impossible
+    # or clearly corrupt values without excluding valid Statcast observations.
     for c in [c for c in qoc if 'avg_ev' in c]:
-        assert f[c].between(40.0, 125.0).all(), c
+        assert f[c].between(0.0, 125.0).all(), c
     for c in [c for c in qoc if 'avg_la' in c]:
         assert f[c].between(-90.0, 90.0).all(), c
 
