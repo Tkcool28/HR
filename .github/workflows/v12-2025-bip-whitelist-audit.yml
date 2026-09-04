@@ -1,0 +1,22 @@
+name: v1.2 2025 BIP whitelist audit
+
+on:
+  push:
+    branches: [feat/v1.2-trustworthy-rebuild]
+    paths: ['.github/workflows/v12-2025-bip-whitelist-audit.yml']
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract and print exact process_bip filtering contract
+        run: |
+          rm -rf work && mkdir work
+          tar -xzf package_bundles/00_code_tests_reports.tar.gz -C work src/data/process_bip.py reports/data_engineer_v11_report.md
+          echo '=== process_bip filter section ==='
+          grep -nE -B15 -A65 'BIP_EVENTS|BIP_OUTCOMES|launch_speed|bip_rows' work/src/data/process_bip.py | head -n 260
+          echo '=== producer report BIP counts ==='
+          grep -nE -A30 -B5 'Per-BIP|events filter|Raw rows|BIP' work/reports/data_engineer_v11_report.md | head -n 220
+          echo BIP_WHITELIST_AUDIT_NO_2025_READ
