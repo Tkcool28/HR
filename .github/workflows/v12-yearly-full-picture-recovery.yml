@@ -42,16 +42,16 @@ jobs:
           unzip -q hold.zip -d hold_art
           find hist_art -maxdepth 3 -type f | sort
           find hold_art -maxdepth 3 -type f | sort
-          test -f hist_art/full_picture/historical_migration.json
-          test -f hist_art/full_picture/historical_scored.parquet
+          test -f hist_art/historical_migration.json
+          test -f hist_art/historical_scored.parquet
           test -f hold_art/holdout_2025/2025_predictions_and_outcomes.parquet
           test -f hold_art/holdout_2025/02_complete_2025_result.json
 
       - name: Build final careful 2019-2025 picture
         run: |
           python experiments/v12_yearly_full_picture.py \
-            --historical-scored hist_art/full_picture/historical_scored.parquet \
-            --historical-json hist_art/full_picture/historical_migration.json \
+            --historical-scored hist_art/historical_scored.parquet \
+            --historical-json hist_art/historical_migration.json \
             --holdout-predictions hold_art/holdout_2025/2025_predictions_and_outcomes.parquet \
             --holdout-result hold_art/holdout_2025/02_complete_2025_result.json \
             --out-json out/yearly_full_picture.json \
