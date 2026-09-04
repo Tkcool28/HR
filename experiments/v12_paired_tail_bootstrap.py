@@ -15,9 +15,10 @@ The script expects two frozen 2023-2024 development prediction tables with the
 same batter-game keys and outcomes. Ranking uses raw XGBoost probability.
 Calibrated probability is never used for selection.
 
-An optional slower game-cluster sensitivity mode resamples games within each
-slate and recomputes the selectors. It is secondary; date-clustered inference
-is the primary result for the product use case.
+An optional whole-game-cluster sensitivity mode resamples games within each
+slate and recomputes the selectors while preserving all batter rows from each
+sampled game. It is secondary; date-clustered inference is the primary result
+for the product use case.
 
 2025 must not be present in either input.
 """
@@ -163,17 +164,70 @@ def bootstrap_dates(
     }
 
 
-def resample_games_within_day(g: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
-    games = g.game_pk.drop_duplicates().to_numpy(dtype=np.int64)
-    sampled = rng.choice(games, size=len(games), replace=True)
-    pieces = []
-    # Give duplicate sampled games unique bootstrap IDs for deterministic ties
-    # while preserving each full 18-row game cluster.
-    for occurrence, game_pk in enumerate(sampled):
-        part = g[g.game_pk.eq(game_pk)].copy()
-        part['game_pk'] = np.int64(occurrence + 1)
-        pieces.append(part)
-    return pd.concat(pieces, ignore_index=True)
+def _selector_n(total_rows: int, selector: Selector) -> int:
+    if selector.frac is not None:
+        return max(1, int(np.ceil(total_rows * selector.frac)))
+    if selector.top_n is not None:
+        return min(int(selector.top_n), total_rows)
+    raise RuntimeError('invalid selector')
+
+
+def _prepare_game_blocks(a: pd.DataFrame, b: pd.DataFrame):
+    """Precompute paired per-game NumPy blocks for fast cluster sensitivity."""
+    days = sorted(pd.Timestamp(x) for x in a.game_date.unique())
+    prepared = []
+    for day in days:
+        ga = a[a.game_date.eq(day)]
+        gb = b[b.game_date.eq(day)]
+        games_a = sorted(ga.game_pk.astype(int).unique())
+        games_b = sorted(gb.game_pk.astype(int).unique())
+        if games_a != games_b:
+            raise RuntimeError(f'paired game sets differ on {day.date()}')
+        blocks = []
+        for game_pk in games_a:
+            xa = ga[ga.game_pk.eq(game_pk)].sort_values('batter_id')
+            xb = gb[gb.game_pk.eq(game_pk)].sort_values('batter_id')
+            if len(xa) != len(xb) or not np.array_equal(
+                xa.batter_id.to_numpy(dtype=np.int64), xb.batter_id.to_numpy(dtype=np.int64)
+            ):
+                raise RuntimeError(f'paired batter rows differ for game {game_pk}')
+            ya = xa.hr_in_game.to_numpy(dtype=np.int8)
+            yb = xb.hr_in_game.to_numpy(dtype=np.int8)
+            if not np.array_equal(ya, yb):
+                raise RuntimeError(f'paired outcomes differ for game {game_pk}')
+            blocks.append({
+                'batter': xa.batter_id.to_numpy(dtype=np.int64),
+                'hr': ya,
+                'score_a': xa.p_raw.to_numpy(dtype=np.float64),
+                'score_b': xb.p_raw.to_numpy(dtype=np.float64),
+            })
+        prepared.append((day, blocks))
+    return prepared
+
+
+def _score_sampled_blocks(blocks, sampled: np.ndarray, selector: Selector):
+    batters = []
+    hrs = []
+    scores_a = []
+    scores_b = []
+    occurrences = []
+    for occurrence, block_idx in enumerate(sampled, start=1):
+        block = blocks[int(block_idx)]
+        n = len(block['hr'])
+        batters.append(block['batter'])
+        hrs.append(block['hr'])
+        scores_a.append(block['score_a'])
+        scores_b.append(block['score_b'])
+        occurrences.append(np.full(n, occurrence, dtype=np.int64))
+    batter = np.concatenate(batters)
+    hr = np.concatenate(hrs)
+    sa = np.concatenate(scores_a)
+    sb = np.concatenate(scores_b)
+    occ = np.concatenate(occurrences)
+    n_select = _selector_n(len(hr), selector)
+    order_a = np.lexsort((batter, occ, -sa))[:n_select]
+    order_b = np.lexsort((batter, occ, -sb))[:n_select]
+    return int(hr[order_a].sum()), n_select, int(hr[order_b].sum()), n_select
 
 
 def bootstrap_games_within_days(
@@ -185,9 +239,9 @@ def bootstrap_games_within_days(
 ) -> dict | None:
     if reps <= 0:
         return None
-    days = sorted(pd.Timestamp(x) for x in a.game_date.unique())
-    a_by_day = {d: a[a.game_date.eq(d)].copy() for d in days}
-    b_by_day = {d: b[b.game_date.eq(d)].copy() for d in days}
+    prepared = _prepare_game_blocks(a, b)
+    if len(prepared) < 100:
+        raise RuntimeError(f'too few slate dates for game-cluster sensitivity: {len(prepared)}')
     rng = np.random.default_rng(seed)
     deltas = np.empty(reps, dtype=np.float64)
     arates = np.empty(reps, dtype=np.float64)
@@ -195,25 +249,11 @@ def bootstrap_games_within_days(
 
     for r in range(reps):
         a_succ = a_n = b_succ = b_n = 0
-        for d in days:
-            # Draw the game multiplicities once, then apply the identical draw to
-            # both models so the comparison remains paired.
-            ga = a_by_day[d]
-            gb = b_by_day[d]
-            games = ga.game_pk.drop_duplicates().to_numpy(dtype=np.int64)
-            sampled = rng.choice(games, size=len(games), replace=True)
-            pa = []
-            pb = []
-            for occurrence, game_pk in enumerate(sampled):
-                xa = ga[ga.game_pk.eq(game_pk)].copy()
-                xb = gb[gb.game_pk.eq(game_pk)].copy()
-                xa['game_pk'] = np.int64(occurrence + 1)
-                xb['game_pk'] = np.int64(occurrence + 1)
-                pa.append(xa); pb.append(xb)
-            sa = select_one_day(pd.concat(pa, ignore_index=True), selector)
-            sb = select_one_day(pd.concat(pb, ignore_index=True), selector)
-            a_succ += int(sa.hr_in_game.sum()); a_n += len(sa)
-            b_succ += int(sb.hr_in_game.sum()); b_n += len(sb)
+        for _, blocks in prepared:
+            sampled = rng.integers(0, len(blocks), size=len(blocks), endpoint=False)
+            sa, na, sb, nb = _score_sampled_blocks(blocks, sampled, selector)
+            a_succ += sa; a_n += na
+            b_succ += sb; b_n += nb
         arates[r] = a_succ / a_n
         brates[r] = b_succ / b_n
         deltas[r] = brates[r] - arates[r]
@@ -227,11 +267,13 @@ def bootstrap_games_within_days(
         }
 
     return {
+        'n_slate_dates': int(len(prepared)),
         'n_replicates': int(reps),
         'bootstrap_a': dist(arates),
         'bootstrap_b': dist(brates),
         'bootstrap_delta_b_minus_a': dist(deltas),
         'prob_delta_gt_0': float(np.mean(deltas > 0)),
+        'prob_delta_ge_0': float(np.mean(deltas >= 0)),
     }
 
 
@@ -260,7 +302,7 @@ def main() -> None:
     ap.add_argument('--out', required=True)
     ap.add_argument('--reps', type=int, default=10000)
     ap.add_argument('--game-reps', type=int, default=0,
-                    help='optional slower within-slate game-cluster replicates')
+                    help='optional whole-game-cluster sensitivity replicates')
     ap.add_argument('--seed', type=int, default=SEED)
     args = ap.parse_args()
 
@@ -276,8 +318,9 @@ def main() -> None:
             'reference_model': args.label_a,
             'challenger_model': args.label_b,
             'primary_cluster': 'game_date/slate',
+            'secondary_cluster': 'whole_game_within_slate',
             'paired_draws': True,
-            'ranking_score': 'raw_xgboost_probability',
+            'ranking_score': 'raw_xgboost_probability_or_frozen_proxy_score',
             'selectors': ['daily_top5pct','daily_top4'],
             'development_years': [2023, 2024],
             'bootstrap_seed': int(args.seed),
