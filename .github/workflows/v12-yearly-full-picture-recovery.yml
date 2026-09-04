@@ -25,7 +25,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install reporting dependencies
-        run: python -m pip install 'pandas==2.2.3' 'numpy>=1.26,<3' 'pyarrow>=16,<22'
+        run: python -m pip install 'pandas==2.2.3' 'numpy>=1.26,<3' 'pyarrow>=16,<22' 'scipy>=1.10,<2'
 
       - name: Download and verify immutable historical and holdout artifacts
         env:
