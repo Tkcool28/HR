@@ -1,0 +1,95 @@
+name: v1.2 trusted rebuild and train
+
+on:
+  push:
+    branches:
+      - feat/v1.2-trustworthy-rebuild
+    paths:
+      - 'trusted_v12/**'
+      - '.github/workflows/v12-trusted-rebuild.yml'
+  workflow_dispatch:
+
+jobs:
+  rebuild-train:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            'pandas==2.2.3' 'numpy>=1.26,<3' 'pyarrow>=16,<22' \
+            'requests>=2.32,<3' 'scikit-learn>=1.5,<2' 'joblib>=1.4,<2' \
+            'xgboost>=2.1,<4' 'optuna>=4,<5' 'pytest>=8,<9'
+
+      - name: Reconstruct delivered source and 2015-2024 historical inputs
+        run: |
+          set -euxo pipefail
+          rm -rf work
+          mkdir -p work/hr_model
+          tar -xzf package_bundles/v1.2_correction/00_v12_code_tests_reports.tar.gz -C work
+          tar -xzf package_bundles/03_raw_pa_2015_2017.tar.gz -C work/hr_model
+          tar -xzf package_bundles/04_raw_pa_2018_2020.tar.gz -C work/hr_model
+          tar -xzf package_bundles/05_raw_pa_2021_2024.tar.gz -C work/hr_model
+          tar -xzf package_bundles/02_bip_all.tar.gz -C work/hr_model
+          tar -xzf package_bundles/01_curated_small_and_splits.tar.gz -C work/hr_model \
+            data/curated/game.parquet \
+            data/splits/train_ids.parquet \
+            data/splits/val_ids.parquet
+          test ! -e work/hr_model/data/splits/holdout_ids.parquet
+          test ! -e work/hr_model/models/holdout_predictions.parquet
+          sudo mkdir -p /workspace
+          sudo rm -rf /workspace/hr_model
+          sudo ln -s "$GITHUB_WORKSPACE/work/hr_model" /workspace/hr_model
+          find work/hr_model -maxdepth 3 -type f | sort | head -100
+
+      - name: Trusted regular-season / venue / lineup rebuild
+        run: python trusted_v12/rebuild_v12_trusted.py
+
+      - name: Run delivered temporal suite against trusted outputs
+        run: |
+          set -euxo pipefail
+          cp /workspace/hr_model/data/curated/pa_v12_trusted.parquet /workspace/hr_model/data/curated/pa_v12.parquet
+          cp /workspace/hr_model/data/curated/game_starters_v12_trusted.parquet /workspace/hr_model/data/curated/game_starters_v12.parquet
+          cp /workspace/hr_model/data/curated/pitch_level_v12_trusted.parquet /workspace/hr_model/data/curated/pitch_level_v12.parquet
+          cp /workspace/hr_model/data/curated/park_factors_v12_trusted.parquet /workspace/hr_model/data/curated/park_factors_v12.parquet
+          cp /workspace/hr_model/features/v1.2_trusted/game_features.parquet /workspace/hr_model/features/v1.2/game_features.parquet
+          cp /workspace/hr_model/features/v1.2_trusted/feature_list.json /workspace/hr_model/features/v1.2/feature_list.json
+          python /workspace/hr_model/tests/test_no_lookahead_v12.py
+          python /workspace/hr_model/tests/test_negative_control.py
+
+      - name: Train with separated tune calibration assessment
+        run: python trusted_v12/train_v12_trusted.py
+
+      - name: Trusted end-to-end tests
+        run: pytest -q trusted_v12/test_trusted_v12.py
+
+      - name: Print trusted metrics
+        if: always()
+        run: |
+          if test -f /workspace/hr_model/models/v1.2_trusted/metrics.json; then
+            cat /workspace/hr_model/models/v1.2_trusted/metrics.json
+          fi
+          if test -f /workspace/hr_model/reports/model_trainer_v12_trusted_report.md; then
+            cat /workspace/hr_model/reports/model_trainer_v12_trusted_report.md
+          fi
+
+      - name: Upload trusted model evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v12-trusted-model-evidence
+          if-no-files-found: warn
+          path: |
+            work/hr_model/features/v1.2_trusted/_summary.json
+            work/hr_model/features/v1.2_trusted/feature_list.json
+            work/hr_model/models/v1.2_trusted/*.json
+            work/hr_model/models/v1.2_trusted/*.csv
+            work/hr_model/models/v1.2_trusted/*.joblib
+            work/hr_model/reports/model_trainer_v12_trusted_report.md
