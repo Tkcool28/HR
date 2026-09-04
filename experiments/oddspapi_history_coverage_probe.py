@@ -73,10 +73,44 @@ def main() -> None:
     s = requests.Session()
     result = {
         "probe": "OddsPapi MLB historical HR-prop archive depth",
+        "secret_diagnostics": {
+            "length": len(api_key),
+            "leading_or_trailing_whitespace": api_key != api_key.strip(),
+            "quote_wrapped": len(api_key) >= 2 and api_key[0] in "\"'" and api_key[-1] == api_key[0],
+        },
         "sport_id": BASEBALL_SPORT_ID,
         "hr_market_id": HR_MARKET_ID,
         "bookmakers": BOOKS,
         "dates": {},
+    }
+
+    acct = get_json(s, "account", api_key)
+    result["account_status"] = acct["status"]
+    if acct["status"] != 200:
+        body = acct.get("json")
+        if isinstance(body, dict):
+            result["account_error_fields"] = {
+                k: body.get(k) for k in ("message", "error", "detail") if body.get(k) is not None
+            }
+        Path(args.out).write_text(json.dumps(result, indent=2))
+        print(json.dumps(result, indent=2))
+        raise SystemExit("OddsPapi account authentication failed")
+
+    # Persist only non-secret subscription capability metadata.
+    aj = acct.get("json") if isinstance(acct.get("json"), dict) else {}
+    result["account"] = {
+        "sport_ids": sorted({sid for sub in aj.get("subscriptions", []) for sid in sub.get("sport_ids", [])}),
+        "active_subscriptions": sum(1 for sub in aj.get("subscriptions", []) if sub.get("is_active")),
+        "request_limits": [sub.get("request_limit") for sub in aj.get("subscriptions", []) if sub.get("is_active")],
+        "bookmaker_capabilities": {
+            book: {
+                "has_player_props": bool(meta.get("has_player_props")),
+                "has_live_odds": bool(meta.get("has_live_odds")),
+            }
+            for sub in aj.get("subscriptions", []) if sub.get("is_active")
+            for book, meta in sub.get("bookmakers", {}).items()
+            if book in BOOKS
+        },
     }
 
     # Verify market catalog semantically without hard-relying on the blog ID.
