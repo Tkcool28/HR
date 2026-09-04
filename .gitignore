@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local/editor
+.DS_Store
+.vscode/
+.idea/
+
+# Large generated/model data
+# Keep heavyweight parquet/model artifacts out of ordinary Git history.
+data/raw/*.parquet
+data/curated/pa.parquet
+features/v1/game_features.parquet
+features/v1.1/game_features.parquet
+models/*.joblib
+models/*.parquet
+models/v1.1/*.joblib
+models/v1.1/*.parquet
+
+# Temporary outputs
+artifacts/
+.tmp/
