@@ -41,7 +41,7 @@ jobs:
             --holdout hold/holdout_2025/2025_predictions_and_outcomes.parquet \
             --out out/market_pull_scope.json
       - name: Report credit contract
-        run: echo 'No Odds API requests are made by this workflow.'
+        run: echo 'No Odds API requests are made by this workflow; 2023 count begins at 2023-05-03.'
       - uses: actions/upload-artifact@v4
         with:
           name: v12-market-pull-scope-count
