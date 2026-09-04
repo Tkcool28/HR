@@ -67,6 +67,23 @@ def test_date_cluster_bootstrap_detects_known_positive_delta():
     assert result['prob_delta_gt_0'] == pytest.approx(1.0)
 
 
+def test_game_cluster_sensitivity_detects_known_positive_delta():
+    # Exercise the secondary path that resamples whole 18-batter game clusters
+    # inside each slate, matching the game-resampling suggestion directly.
+    a, b = synthetic_pair(n_days=20)
+    a, b = boot.validate_pair(a, b)
+    result = boot.bootstrap_games_within_days(
+        a,
+        b,
+        boot.Selector('daily_top5pct', frac=0.05),
+        reps=100,
+        seed=789,
+    )
+    assert result is not None
+    assert result['bootstrap_delta_b_minus_a']['median'] > 0
+    assert result['prob_delta_gt_0'] > 0.95
+
+
 def test_identical_models_have_zero_paired_delta():
     a, _ = synthetic_pair()
     a, b = boot.validate_pair(a.copy(), a.copy())
