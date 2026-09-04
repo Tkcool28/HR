@@ -1,0 +1,209 @@
+name: v1.2 correction audit
+
+on:
+  push:
+    branches:
+      - feat/v1.2-correction-audit
+    paths:
+      - '.github/workflows/v12-correction-audit.yml'
+      - 'package_bundles/**'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/v12-correction-audit.yml'
+      - 'package_bundles/**'
+  workflow_dispatch:
+
+jobs:
+  as-delivered:
+    name: Exact correction package / independent checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install audit dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'pandas==2.2.3' 'numpy>=1.26,<3' 'pyarrow>=16,<22'
+
+      - name: Reconstruct exact correction package
+        shell: bash
+        run: |
+          set -euxo pipefail
+          B=package_bundles/v1.2_correction
+          rm -rf /tmp/v12meta reconstructed
+          mkdir -p /tmp/v12meta reconstructed
+          tar -xzf "$B/99_v12_manifest_reconstruction.tar.gz" -C /tmp/v12meta
+          bash /tmp/v12meta/reconstruct_v12_correction.sh "$B" reconstructed
+
+      - name: Verify every reconstructed file SHA-256
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          manifest = Path('/tmp/v12meta/manifest.txt').read_text().splitlines()
+          expected = {}
+          in_original = False
+          for line in manifest:
+              if line.strip() == 'Original files:':
+                  in_original = True
+                  continue
+              if line.strip() == 'Bundle files:':
+                  break
+              if in_original and line.strip() and not line.startswith('#'):
+                  sha, path = line.split(None, 1)
+                  expected[path.strip()] = sha
+          assert len(expected) == 17, len(expected)
+          for rel, want in expected.items():
+              p = Path('reconstructed') / rel
+              assert p.is_file(), f'missing {rel}'
+              got = hashlib.sha256(p.read_bytes()).hexdigest()
+              assert got == want, f'{rel}: {got} != {want}'
+              print('PASS SHA256', rel)
+          print('PASS all 17 original correction files match manifest')
+          PY
+
+      - name: Provide package legacy path
+        run: |
+          sudo mkdir -p /workspace
+          sudo ln -sfn "$GITHUB_WORKSPACE/reconstructed/hr_model" /workspace/hr_model
+
+      - name: Compile correction source
+        run: python -m compileall -q reconstructed/hr_model/src reconstructed/hr_model/features reconstructed/hr_model/tests
+
+      - name: Run delivered 35-check temporal suite
+        working-directory: reconstructed/hr_model
+        run: python tests/test_no_lookahead_v12.py
+
+      - name: Independent structural sanity checks
+        working-directory: reconstructed/hr_model
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          import numpy as np
+          import pyarrow.parquet as pq
+
+          paths = {
+              'pa': 'data/curated/pa_v12.parquet',
+              'starters': 'data/curated/game_starters_v12.parquet',
+              'park': 'data/curated/park_factors_v12.parquet',
+              'pitch': 'data/curated/pitch_level_v12.parquet',
+              'features': 'features/v1.2/game_features.parquet',
+          }
+          for name, path in paths.items():
+              meta = pq.read_metadata(path)
+              print(f'{name}: rows={meta.num_rows:,} cols={meta.num_columns}')
+
+          pa = pd.read_parquet(paths['pa'])
+          assert len(pa) == len(pa[['game_pk','at_bat_number']].drop_duplicates())
+          assert 0.02 <= float(pa['is_hr'].mean()) <= 0.05
+
+          pl = pd.read_parquet(paths['pitch'])
+          assert pd.to_datetime(pl['game_date']).dt.year.max() == 2024
+          assert len(pl) > 6_000_000
+
+          f = pd.read_parquet(paths['features'])
+          assert pd.to_datetime(f['game_date']).dt.year.max() == 2024
+          assert len(f) == 198_037, len(f)
+          usage = [c for c in f.columns if c.startswith('pitcher_usage_') and c.endswith('_30d')]
+          assert len(usage) >= 9, usage
+          arr = f[usage].to_numpy(float)
+          assert np.nanmax(np.nanstd(arr, axis=1)) > 1e-4
+          top = f['pitcher_top_pitch'].fillna('').astype(str)
+          ff_share = float((top == 'FF').mean())
+          print('pitcher_top_pitch FF share:', ff_share)
+          assert ff_share < 0.95
+          print('PASS independent structural checks')
+          PY
+
+  rebuild-from-source:
+    name: Rebuild v1.2 correction from 2015-2024 inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'pandas==2.2.3' 'numpy>=1.26,<3' 'pyarrow>=16,<22'
+
+      - name: Restore 2015-2024 historical inputs
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p rebuild
+          for f in \
+            package_bundles/00_code_tests_reports.tar.gz \
+            package_bundles/01_curated_small_and_splits.tar.gz \
+            package_bundles/02_bip_all.tar.gz \
+            package_bundles/03_raw_pa_2015_2017.tar.gz \
+            package_bundles/04_raw_pa_2018_2020.tar.gz \
+            package_bundles/05_raw_pa_2021_2024.tar.gz; do
+              tar -xzf "$f" -C rebuild
+          done
+          test ! -f rebuild/data/raw/pa_2025.parquet
+          echo 'PASS: no 2025 raw PA input materialized'
+
+      - name: Overlay exact v1.2 correction source only
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tar -xzf package_bundles/v1.2_correction/00_v12_code_tests_reports.tar.gz --strip-components=1 -C rebuild
+          test -f rebuild/src/data/build_pitch_level_v12.py
+          test -f rebuild/features/v1.2/build_features.py
+          test -f rebuild/tests/test_no_lookahead_v12.py
+
+      - name: Provide build legacy path
+        run: |
+          sudo mkdir -p /workspace
+          sudo ln -sfn "$GITHUB_WORKSPACE/rebuild" /workspace/hr_model
+
+      - name: Build true PA and starter tables
+        run: /usr/bin/time -v python rebuild/src/data/build_pa_v12.py
+
+      - name: Build per-pitch source of truth
+        run: /usr/bin/time -v python rebuild/src/data/build_pitch_level_v12.py
+
+      - name: Build prior-only park factors
+        run: /usr/bin/time -v python rebuild/src/data/process_park_factors_v12.py
+
+      - name: Build corrected v1.2 feature matrix
+        run: /usr/bin/time -v python rebuild/features/v1.2/build_features.py
+
+      - name: Run 35-check suite on rebuilt outputs
+        working-directory: rebuild
+        run: python tests/test_no_lookahead_v12.py
+
+      - name: Verify rebuilt headline invariants
+        working-directory: rebuild
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          import pyarrow.parquet as pq
+          expected = {
+              'data/curated/pa_v12.parquet': 1_756_558,
+              'data/curated/game_starters_v12.parquet': 23_191,
+              'data/curated/pitch_level_v12.parquet': 6_787_051,
+              'features/v1.2/game_features.parquet': 198_037,
+          }
+          for p, n in expected.items():
+              got = pq.read_metadata(p).num_rows
+              assert got == n, f'{p}: expected {n:,}, got {got:,}'
+              print(f'PASS {p}: {got:,}')
+          f = pd.read_parquet('features/v1.2/game_features.parquet', columns=['game_date','split','pitcher_top_pitch'])
+          assert pd.to_datetime(f.game_date).dt.year.max() == 2024
+          print('split counts:', f['split'].value_counts(dropna=False).to_dict())
+          print('top-pitch distribution:', f['pitcher_top_pitch'].fillna('').value_counts().head(12).to_dict())
+          print('PASS rebuilt headline invariants')
+          PY
