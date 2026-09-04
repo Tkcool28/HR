@@ -50,8 +50,11 @@ jobs:
           sudo ln -s "$GITHUB_WORKSPACE/work/hr_model" /workspace/hr_model
           find work/hr_model -maxdepth 3 -type f | sort | head -100
 
-      - name: Trusted regular-season / venue / lineup rebuild
+      - name: Trusted regular-season / venue / lineup core rebuild
         run: python trusted_v12/rebuild_v12_trusted.py
+
+      - name: Add leakage-safe Statcast QoC ablation layer
+        run: python trusted_v12/augment_qoc_trusted.py
 
       - name: Run delivered temporal suite against trusted outputs
         run: |
@@ -69,7 +72,7 @@ jobs:
         run: python trusted_v12/train_v12_trusted.py
 
       - name: Trusted end-to-end tests
-        run: pytest -q trusted_v12/test_trusted_v12.py
+        run: pytest -q trusted_v12/test_trusted_v12.py trusted_v12/test_qoc_trusted.py
 
       - name: Print trusted metrics
         if: always()
@@ -88,6 +91,8 @@ jobs:
           name: v12-trusted-model-evidence
           if-no-files-found: warn
           path: |
+            work/hr_model/features/v1.2_core_baseline/_summary.json
+            work/hr_model/features/v1.2_core_baseline/feature_list.json
             work/hr_model/features/v1.2_trusted/_summary.json
             work/hr_model/features/v1.2_trusted/feature_list.json
             work/hr_model/models/v1.2_trusted/*.json
