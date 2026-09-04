@@ -82,7 +82,25 @@ Treat this as a latent robustness defect, not a current statistical contaminatio
 - final feature games: 23,054
 - 137 starter/split games are absent from `game.parquet` and therefore absent from the final feature universe.
 
-This is a coverage issue requiring source-level explanation before final freeze, but it is small relative to the lineup-universe defect.
+This is inherited from the original package rather than introduced by the v1.2 correction. The original split-integrity failure was larger because it also included the sealed 2025 split; after restricting to 2015-2024, 137 historical games remain outside `game.parquet`.
+
+## Historical park-identity defect
+
+The leakage-safe v1.2 park-factor averaging still depends on the original pipeline's `park_id`. That `park_id` is not an actual venue identifier from each game: it is assigned from a static `home_team -> park_id` table.
+
+The source comment claims a `(home_team, game_year) -> park_id` lookup, but the implementation does not use year. As a result, historical stadium changes and special-site games are misidentified.
+
+Direct audit of the delivered BIP data shows:
+
+- ATL: every home BIP from 2015-2024 is assigned `park_id=41` (Truist Park), including 4,178 BIPs in 2015 and 4,228 in 2016. Atlanta did not move from Turner Field to its new park until 2017.
+- TEX: every home BIP from 2015-2024 is assigned `park_id=27` (Globe Life Field), including 21,876 BIPs from 2015-2019. The Rangers' 2019 season was the final season at Globe Life Park and they moved to Globe Life Field for 2020.
+- TOR: every home BIP in 2020 and 2021 is assigned `park_id=28` (Rogers Centre), despite Toronto playing the majority of 2020 home games at Sahlen Field in Buffalo and opening 2021 home games at TD Ballpark in Dunedin before later using Buffalo and returning to Toronto.
+
+This affects both direct game park features and the historical source observations used to compute future prior-3-year park factors. For example, Texas' 2020-2022 Globe Life Field prior factors can inherit observations from the old Globe Life Park because 2017-2019 were mislabeled as the new stadium.
+
+The park table also lists special/neutral venues (London, Field of Dreams, Williamsport, etc.) but the ordinary mapping is based on MLB `home_team`, so those games cannot be reliably distinguished from the club's normal home stadium using this implementation.
+
+This is a genuine model-data defect, separate from the same-season leakage that v1.2 correctly repaired.
 
 ## Feature-health diagnostics
 
@@ -93,6 +111,12 @@ For the delivered 54-feature matrix:
 - active numeric features containing infinity: 0
 - exact duplicate numeric active feature pairs: 0
 - park factors equal neutral 100.0 for all 2015 rows and essentially none from 2016 onward, consistent with no prior seasons being available for 2015.
+
+### Pitch-type semantic mismatch
+
+`pitcher_top_pitch` is determined from all individual pitches thrown in the prior 30-day window, which is appropriate for an arsenal-usage feature. However, the batter/pitcher `*_hr_per_pa_vs_<PT>_30d` features use `terminal_pitch_type` from each PA. They therefore estimate HR rate among PAs that **ended** on pitch type PT, not performance across all exposures to PT.
+
+`batter_strength_on_pitcher_top_pitch` consequently means roughly "batter HR rate in prior PAs ending on the pitcher's most-used pitch type," not a general measure of batter performance against every pitch of that type. This is not temporal leakage, but the naming/interpretation overstates the feature semantics.
 
 ## Trainer-interface defect
 
@@ -129,6 +153,15 @@ This is not target-label leakage, but it is future-distribution leakage and mean
 
 The walk-forward also uses fixed XGBoost parameters rather than reproducing a nested tuning/calibration procedure, so it should be treated as a secondary stability diagnostic, not as an independent validation of the tuned/calibrated production pipeline.
 
+## Acquisition / reproducibility findings
+
+The original acquisition code contains two operational defects:
+
+- `acquire.py` uses `glob.glob(...)` in `main()` without importing `glob`, so the combined-parquet stage is not reproducible as written.
+- `re_chunk_if_capped()` immediately returns cached chunks without rechecking whether they are at the Savant cap. A previously cached capped/truncated response would therefore be preserved on a rerun instead of recursively split. `acquire_season()` only logs the number still capped rather than failing closed.
+
+However, the delivered acquisition logs report `0 still capped after re-chunking` for every 2015-2025 season. Therefore there is no evidence from the delivered logs that the historical data used here was actually truncated by this bug. Treat it as latent acquisition fragility, not a confirmed current-data loss finding.
+
 ## Minor implementation debt observed
 
 - `catcher_interference` is included in the generic `out` branch of PA outcome classification, making the later intended `walk` branch unreachable. This does not change HR labels but is a correctness/code-quality defect.
@@ -136,4 +169,4 @@ The walk-forward also uses fixed XGBoost parameters rather than reproducing a ne
 
 ## Current audit verdict
 
-The v1.2 correction substantially improves the temporal feature engine and correctly repairs the pitch-usage/top-pitch bug. The code is reproducible from historical inputs and the rebuilt feature matrix is structurally healthy. However, the batting-universe proxy is a critical conceptual defect that materially changes the sampled population, the active feature list is not trainer-compatible, and the inherited training/evaluation architecture reuses the 2023-2024 validation block too aggressively to support clean calibrated-performance claims. No model performance claim should be accepted from this v1.2 matrix until the target-universe issue is repaired and the evaluation design separates tuning, calibration fitting, and final assessment.
+The v1.2 correction substantially improves the temporal feature engine and correctly repairs the pitch-usage/top-pitch bug. The code is reproducible from historical inputs and the rebuilt feature matrix is structurally healthy. However, the batting-universe proxy is a critical conceptual defect that materially changes the sampled population; historical venue identity is also wrong for known stadium changes and special-site games; the active feature list is not trainer-compatible; and the inherited training/evaluation architecture reuses the 2023-2024 validation block too aggressively to support clean calibrated-performance claims. No model performance claim should be accepted from this v1.2 matrix until the target-universe and park-identity issues are repaired and the evaluation design separates tuning, calibration fitting, and final assessment.
