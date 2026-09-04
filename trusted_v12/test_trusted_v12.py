@@ -82,12 +82,26 @@ def test_park_sources_prior_only():
         assert all(r.year - 3 <= y < r.year for y in src)
 
 
-def test_training_artifacts_and_independent_design():
+def test_training_artifacts_and_aggressive_design():
     m = json.loads((MODELS/'metrics.json').read_text())
-    assert m['design']['holdout_2025_read'] is False
-    assert m['design']['tune_selection'] == '2021'
-    assert m['design']['calibration_fit'] == '2022'
-    assert m['design']['independent_assessment'] == '2023-2024'
+    d = m['design']
+    assert d['holdout_2025_read'] is False
+    assert d['sealed_final_holdout'] == '2025'
+    assert d['assessment_is_final_holdout'] is False
+    assert d['tune_selection'] == 'walk-forward-2019-2021'
+    assert d['tune_objective'] == 'mean-fold-brier'
+    assert d['n_trials'] == 50
+    assert d['calibration_fit'] == '2022'
+    assert d['development_assessment'] == '2023-2024'
+    assert [x['score'] for x in d['tune_folds']] == ['2019','2020','2021']
+    assert m['n_features'] == 73
+    assert set(m['tune_fold_brier']) == {'2019','2020','2021'}
+    assert set(m['tune_fold_best_rounds']) == {'2019','2020','2021'}
+    trials = pd.read_csv(MODELS/'xgb_trials.csv')
+    assert len(trials) == 50
+    for c in ['brier_2019','brier_2020','brier_2021','mean_brier',
+              'best_round_2019','best_round_2020','best_round_2021','median_best_round']:
+        assert c in trials.columns
     for key in ['lr_test','xgb_raw_test','xgb_calibrated_test']:
         assert 0 < m[key]['brier'] < 0.25
         assert 0.45 < m[key]['auc'] < 0.90
