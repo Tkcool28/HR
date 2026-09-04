@@ -1,0 +1,132 @@
+name: v1.2 frozen real tail bootstrap
+
+on:
+  push:
+    branches:
+      - feat/v1.2-trustworthy-rebuild
+    paths:
+      - 'experiments/v12_paired_tail_bootstrap.py'
+      - 'experiments/v12_score_frozen_tail_model.py'
+      - 'experiments/contracts/v12_full73_aggressive.json'
+      - 'experiments/contracts/v12_pruned62_aggressive.json'
+      - 'trusted_v12/prepare_pruned62_challenger.py'
+      - '.github/workflows/v12-real-tail-bootstrap.yml'
+  workflow_dispatch:
+
+jobs:
+  bootstrap-tail:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            'pandas==2.2.3' 'numpy>=1.26,<3' 'pyarrow>=16,<22' \
+            'requests>=2.32,<3' 'scikit-learn>=1.5,<2' \
+            'xgboost>=2.1,<4'
+
+      - name: Reconstruct trusted 2015-2024 inputs
+        run: |
+          set -euxo pipefail
+          rm -rf work
+          mkdir -p work/hr_model
+          tar -xzf package_bundles/v1.2_correction/00_v12_code_tests_reports.tar.gz -C work
+          tar -xzf package_bundles/03_raw_pa_2015_2017.tar.gz -C work/hr_model
+          tar -xzf package_bundles/04_raw_pa_2018_2020.tar.gz -C work/hr_model
+          tar -xzf package_bundles/05_raw_pa_2021_2024.tar.gz -C work/hr_model
+          tar -xzf package_bundles/02_bip_all.tar.gz -C work/hr_model
+          tar -xzf package_bundles/01_curated_small_and_splits.tar.gz -C work/hr_model \
+            data/curated/game.parquet \
+            data/splits/train_ids.parquet \
+            data/splits/val_ids.parquet
+          test ! -e work/hr_model/data/splits/holdout_ids.parquet
+          test ! -e work/hr_model/models/holdout_predictions.parquet
+          cp trusted_v12/process_park_factors_trusted.py work/hr_model/src/data/process_park_factors_v12.py
+          sudo mkdir -p /workspace
+          sudo rm -rf /workspace/hr_model
+          sudo ln -s "$GITHUB_WORKSPACE/work/hr_model" /workspace/hr_model
+
+      - name: Rebuild frozen trusted 73-feature matrix
+        run: |
+          python trusted_v12/rebuild_v12_trusted.py
+          python trusted_v12/augment_qoc_trusted.py
+          python - <<'PY'
+          import json, pandas as pd
+          root='/workspace/hr_model'
+          cols=json.load(open(root+'/features/v1.2_trusted/feature_list.json'))
+          assert len(cols)==73, len(cols)
+          d=pd.read_parquet(root+'/features/v1.2_trusted/game_features.parquet', columns=['year','game_pk','batter_id'])
+          assert d.year.between(2015,2024).all()
+          assert not d.duplicated(['game_pk','batter_id']).any()
+          print('full73 source PASS; 2025 NOT READ')
+          PY
+
+      - name: Materialize frozen pruned62 feature list
+        run: python trusted_v12/prepare_pruned62_challenger.py
+
+      - name: Re-score frozen full73 champion
+        run: |
+          python experiments/v12_score_frozen_tail_model.py \
+            --feature-list /workspace/hr_model/features/v1.2_trusted/feature_list.json \
+            --contract experiments/contracts/v12_full73_aggressive.json \
+            --label full73_aggressive \
+            --out /workspace/hr_model/bootstrap/full73_predictions.parquet
+
+      - name: Re-score frozen pruned62 challenger
+        run: |
+          python experiments/v12_score_frozen_tail_model.py \
+            --feature-list /workspace/hr_model/features/v1.2_pruned62/feature_list.json \
+            --contract experiments/contracts/v12_pruned62_aggressive.json \
+            --label pruned62_aggressive \
+            --out /workspace/hr_model/bootstrap/pruned62_predictions.parquet
+
+      - name: Run paired date-cluster and game-cluster tail bootstrap
+        run: |
+          python experiments/v12_paired_tail_bootstrap.py \
+            --a /workspace/hr_model/bootstrap/full73_predictions.parquet \
+            --b /workspace/hr_model/bootstrap/pruned62_predictions.parquet \
+            --label-a full73_aggressive \
+            --label-b pruned62_aggressive \
+            --out /workspace/hr_model/bootstrap/full73_vs_pruned62_bootstrap.json \
+            --reps 10000 \
+            --game-reps 500 \
+            --seed 20260904
+
+      - name: Verify bootstrap contract
+        run: |
+          python - <<'PY'
+          import json
+          p=json.load(open('/workspace/hr_model/bootstrap/full73_vs_pruned62_bootstrap.json'))
+          d=p['design']
+          assert d['primary_replicates']==10000
+          assert d['secondary_game_replicates']==500
+          assert d['holdout_2025_read'] is False
+          assert set(p['by_year'])=={'2023','2024'}
+          for scope in [p['combined_2023_2024'], p['by_year']['2023'], p['by_year']['2024']]:
+              assert set(scope)=={'daily_top5pct','daily_top4'}
+          print('real tail bootstrap contract PASS; 2025 NOT READ')
+          PY
+
+      - name: Print key bootstrap results
+        if: always()
+        run: |
+          test -f /workspace/hr_model/bootstrap/full73_predictions.metrics.json && cat /workspace/hr_model/bootstrap/full73_predictions.metrics.json || true
+          test -f /workspace/hr_model/bootstrap/pruned62_predictions.metrics.json && cat /workspace/hr_model/bootstrap/pruned62_predictions.metrics.json || true
+          test -f /workspace/hr_model/bootstrap/full73_vs_pruned62_bootstrap.json && cat /workspace/hr_model/bootstrap/full73_vs_pruned62_bootstrap.json || true
+
+      - name: Upload frozen bootstrap evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v12-frozen-real-tail-bootstrap
+          if-no-files-found: error
+          path: |
+            work/hr_model/bootstrap/*.json
+            work/hr_model/bootstrap/*.parquet
