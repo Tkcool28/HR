@@ -1,0 +1,47 @@
+name: v1.2 market pull scope count
+
+on:
+  push:
+    branches:
+      - feat/v1.2-trustworthy-rebuild
+    paths:
+      - '.github/workflows/v12-market-pull-scope-count.yml'
+  workflow_dispatch:
+
+jobs:
+  count:
+    runs-on: ubuntu-24.04
+    env:
+      HIST_ARTIFACT_ID: '9952010153'
+      HIST_ARTIFACT_SHA256: '2a1236c79053d360a540408dfe41e5f82c16c8172b0f158cfbfe2094fb6c51b5'
+      HOLDOUT_ARTIFACT_ID: '9951133562'
+      HOLDOUT_ARTIFACT_SHA256: '3b42f6a80944f53247cb400e7e0be0bf5ac407439ae402fc68bbf034ca06ddec'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'pandas==2.2.3' 'pyarrow>=16,<22'
+      - name: Download verified prediction artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          mkdir -p hist hold out
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${HIST_ARTIFACT_ID}/zip" > hist.zip
+          echo "${HIST_ARTIFACT_SHA256}  hist.zip" | sha256sum -c -
+          unzip -q hist.zip -d hist
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${HOLDOUT_ARTIFACT_ID}/zip" > hold.zip
+          echo "${HOLDOUT_ARTIFACT_SHA256}  hold.zip" | sha256sum -c -
+          unzip -q hold.zip -d hold
+      - name: Count target games and credit scenarios
+        run: |
+          python experiments/v12_market_pull_scope_count.py \
+            --historical hist/historical_scored.parquet \
+            --holdout hold/holdout_2025/2025_predictions_and_outcomes.parquet \
+            --out out/market_pull_scope.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v12-market-pull-scope-count
+          path: out/market_pull_scope.json
+          if-no-files-found: error
