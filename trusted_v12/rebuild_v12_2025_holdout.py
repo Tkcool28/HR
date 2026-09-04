@@ -17,7 +17,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-import trusted_v12.rebuild_v12_trusted as base
+# This script is executed by file path (``python trusted_v12/...py``), so the
+# script directory itself is on sys.path. Use a sibling import rather than a
+# package import; this changes only invocation plumbing, not any feature logic.
+import rebuild_v12_trusted as base
 
 ROOT=Path('/workspace/hr_model')
 CUR=ROOT/'data/curated'; RAW=ROOT/'data/raw'
