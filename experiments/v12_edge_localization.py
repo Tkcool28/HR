@@ -1,8 +1,8 @@
 """Localize where the frozen full73 HR model earns actionable tail edge.
 
 This does NOT claim to reconstruct historical public betting consensus or HR
-prop prices.  Instead it builds an intentionally simple "obvious power" proxy
-from long-horizon batter-only power/contact-quality features.  It then asks:
+prop prices. Instead it builds an intentionally simple "obvious power" proxy
+from long-horizon batter-only power/contact-quality features. It then asks:
 
 - how much does the full73 top-4 overlap the obvious-power top-4?
 - how often do full73-only (differentiated) picks homer?
@@ -13,7 +13,7 @@ The point is to determine whether the model's practical value comes only from
 ranking familiar sluggers, or whether park/pitcher/recent-form/matchup context
 finds useful candidates the batter-only proxy would not select.
 
-All inference is 2023-2024 development evidence.  2025 is rejected.
+All inference is 2023-2024 development evidence. 2025 is rejected.
 """
 from __future__ import annotations
 
@@ -30,8 +30,12 @@ FLIST = ROOT/'features/v1.2_trusted/feature_list.json'
 SEED = 20260904
 
 
+def _ordered(g: pd.DataFrame, score: str) -> pd.DataFrame:
+    return g.sort_values([score, 'game_pk', 'batter_id'], ascending=[False, True, True])
+
+
 def _top_n(g: pd.DataFrame, score: str, n: int = 4) -> set[tuple[int,int]]:
-    z = g.sort_values([score, 'game_pk', 'batter_id'], ascending=[False, True, True]).head(n)
+    z = _ordered(g, score).head(n)
     return set(zip(z.game_pk.astype(int), z.batter_id.astype(int)))
 
 
@@ -57,8 +61,10 @@ def _bootstrap_segment_rates(frame: pd.DataFrame, masks: dict[str,pd.Series], re
         s = np.zeros(len(dates), dtype=np.float64)
         n = np.zeros(len(dates), dtype=np.float64)
         for d, row in agg.iterrows():
-            i = date_pos[np.datetime64(d)]
-            s[i] = float(row['sum']); n[i] = float(row['count'])
+            key = np.datetime64(pd.Timestamp(d).to_datetime64())
+            i = date_pos[key]
+            s[i] = float(row['sum'])
+            n[i] = float(row['count'])
         stats[name] = (s,n)
 
     rng = np.random.default_rng(seed)
@@ -110,7 +116,7 @@ def _present_obvious(active: list[str]) -> list[str]:
     ]
     cols = [c for c in preferred if c in active]
     # Delivered-core naming is checked dynamically, but do not silently broaden
-    # this into recent/context features.  The proxy must remain long-horizon
+    # this into recent/context features. The proxy must remain long-horizon
     # and batter-only.
     if len(cols) < 5:
         fallback = [
@@ -164,6 +170,14 @@ def _composite_percentile(frame: pd.DataFrame, cols: list[str], train_medians: p
     return pd.concat(pieces, axis=1).mean(axis=1)
 
 
+def _assign_daily_rank(frame: pd.DataFrame, score: str, out_col: str) -> pd.Series:
+    ranks = pd.Series(index=frame.index, dtype='int32')
+    for _, g in frame.groupby('game_date', sort=True):
+        ordered = _ordered(g, score)
+        ranks.loc[ordered.index] = np.arange(1, len(ordered)+1, dtype=np.int32)
+    return ranks.astype('int32')
+
+
 def _scope(frame: pd.DataFrame, reps: int, seed: int) -> dict:
     masks = {
         'model_top4': frame.model_top4,
@@ -210,14 +224,15 @@ def main() -> None:
         raise RuntimeError('edge-localization features escaped 2015-2024')
 
     train = features[features.year<=2022]
-    medians = train[sorted(set(obvious+[c for g in groups.values() for c in g]))].median(numeric_only=True)
+    score_features = sorted(set(obvious+[c for g in groups.values() for c in g]))
+    medians = train[score_features].median(numeric_only=True)
+    if medians.isna().any():
+        raise RuntimeError(f'all-NaN proxy/context feature medians: {medians[medians.isna()].index.tolist()}')
 
     pred = pd.read_parquet(args.predictions)
     pred['game_date'] = pd.to_datetime(pred.game_date).dt.normalize()
     if not pred.year.isin([2023,2024]).all():
         raise RuntimeError('edge-localization predictions escaped 2023-2024')
-    if '2025' in ' '.join(map(str,pred.year.unique())):
-        raise RuntimeError('2025 escaped into edge-localization')
 
     dev = features[features.year.isin([2023,2024])].merge(
         pred[['game_pk','batter_id','p_raw']], on=['game_pk','batter_id'], how='inner', validate='one_to_one'
@@ -229,19 +244,10 @@ def main() -> None:
     for name,cols in groups.items():
         dev[f'{name}_score'] = _composite_percentile(dev, cols, medians)
 
-    dev['model_rank'] = dev.groupby('game_date').p_raw.rank(method='first', ascending=False)
-    # deterministic baseline ties: sort then cumcount
-    dev = dev.sort_values(['game_date','obvious_power_score','game_pk','batter_id'], ascending=[True,False,True,True]).copy()
-    dev['obvious_rank'] = dev.groupby('game_date').cumcount()+1
-
-    model_keys = set()
-    obvious_keys = set()
-    for _,g in dev.groupby('game_date',sort=True):
-        model_keys |= _top_n(g,'p_raw',4)
-        obvious_keys |= _top_n(g,'obvious_power_score',4)
-    keys = list(zip(dev.game_pk.astype(int),dev.batter_id.astype(int)))
-    dev['model_top4'] = [k in model_keys for k in keys]
-    dev['obvious_top4'] = [k in obvious_keys for k in keys]
+    dev['model_rank'] = _assign_daily_rank(dev, 'p_raw', 'model_rank')
+    dev['obvious_rank'] = _assign_daily_rank(dev, 'obvious_power_score', 'obvious_rank')
+    dev['model_top4'] = dev.model_rank.le(4)
+    dev['obvious_top4'] = dev.obvious_rank.le(4)
     dev['segment'] = np.select(
         [dev.model_top4 & dev.obvious_top4, dev.model_top4 & ~dev.obvious_top4, ~dev.model_top4 & dev.obvious_top4],
         ['shared_top4','model_only','obvious_only'],
@@ -286,13 +292,15 @@ def main() -> None:
         },
     }
 
-    outj=Path(args.out_json); outj.parent.mkdir(parents=True,exist_ok=True)
+    outj=Path(args.out_json)
+    outj.parent.mkdir(parents=True,exist_ok=True)
     outj.write_text(json.dumps(payload,indent=2))
     Path(args.out_parquet).parent.mkdir(parents=True,exist_ok=True)
     dev.to_parquet(args.out_parquet,index=False)
 
     baseline = pred[['game_pk','batter_id','game_date','year','hr_in_game']].merge(
-        dev[['game_pk','batter_id','obvious_power_score']], on=['game_pk','batter_id'], how='one_to_one' if False else 'inner', validate='one_to_one'
+        dev[['game_pk','batter_id','obvious_power_score']],
+        on=['game_pk','batter_id'], how='inner', validate='one_to_one'
     )
     if len(baseline)!=len(pred):
         raise RuntimeError('baseline export row mismatch')
