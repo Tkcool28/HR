@@ -102,6 +102,33 @@ For the delivered 54-feature matrix:
 
 Thus the corrected v1.2 feature set is not currently consumable by the existing numeric training interface without an encoding/removal/interface change. This is operational/model-interface debt, not evidence of temporal leakage.
 
+## Training / validation architecture findings
+
+The v1.2 correction package does not provide a replacement training/evaluation architecture; the existing v1/v1.1 trainer remains the relevant implementation. That trainer has a material validation-reuse problem.
+
+The same 2023-2024 validation block is used repeatedly for:
+
+1. Optuna hyperparameter selection (25 trials in v1.1), optimizing validation Brier.
+2. Early stopping inside each trial on the same validation block.
+3. Selecting the final best boosting round via early stopping on that same validation block.
+4. Reporting raw XGBoost validation Brier/AUC/AP/log-loss/top-5%.
+5. Fitting `IsotonicRegression` on those same validation predictions and labels.
+6. Reporting calibrated Brier/AUC/AP/log-loss on those same calibration-fit rows.
+7. Computing `reliability_val.csv` on those same calibration-fit rows.
+8. Running `tests/test_calibration.py`, including ECE and per-bin reliability, on those same calibration-fit rows.
+
+Therefore the published calibrated validation performance is not an independent generalization estimate. In particular, the reported validation ECE of 0.0000 is not meaningful evidence of out-of-sample calibration because isotonic calibration was fit and then evaluated on the same predictions/labels.
+
+Main-path preprocessing is cleaner: NaN imputation means and LR scaling parameters are computed from the training split only and then applied to validation/holdout.
+
+### Walk-forward future-distribution leakage
+
+The v1.1 `walkforward_backtest()` computes a single `col_means` vector from the complete train+validation union before iterating through seasons 2019-2024. Each historical fold therefore uses imputation statistics containing feature-distribution information from its test season and future seasons. Example: the 2019 fold's imputation vector can reflect 2020-2024 observations.
+
+This is not target-label leakage, but it is future-distribution leakage and means the walk-forward is not a clean fold-local simulation. Preprocessing should be fitted independently from the prior-year training slice inside each fold.
+
+The walk-forward also uses fixed XGBoost parameters rather than reproducing a nested tuning/calibration procedure, so it should be treated as a secondary stability diagnostic, not as an independent validation of the tuned/calibrated production pipeline.
+
 ## Minor implementation debt observed
 
 - `catcher_interference` is included in the generic `out` branch of PA outcome classification, making the later intended `walk` branch unreachable. This does not change HR labels but is a correctness/code-quality defect.
@@ -109,4 +136,4 @@ Thus the corrected v1.2 feature set is not currently consumable by the existing 
 
 ## Current audit verdict
 
-The v1.2 correction substantially improves the temporal feature engine and correctly repairs the pitch-usage/top-pitch bug. The code is reproducible from historical inputs and the rebuilt feature matrix is structurally healthy. However, the batting-universe proxy is a critical conceptual defect that materially changes the sampled population, and the active feature list is not yet trainer-compatible. No model performance claim should be accepted from this v1.2 matrix until the target-universe issue is repaired and the resulting 2015-2024 feature matrix is rebuilt/revalidated.
+The v1.2 correction substantially improves the temporal feature engine and correctly repairs the pitch-usage/top-pitch bug. The code is reproducible from historical inputs and the rebuilt feature matrix is structurally healthy. However, the batting-universe proxy is a critical conceptual defect that materially changes the sampled population, the active feature list is not trainer-compatible, and the inherited training/evaluation architecture reuses the 2023-2024 validation block too aggressively to support clean calibrated-performance claims. No model performance claim should be accepted from this v1.2 matrix until the target-universe issue is repaired and the evaluation design separates tuning, calibration fitting, and final assessment.
