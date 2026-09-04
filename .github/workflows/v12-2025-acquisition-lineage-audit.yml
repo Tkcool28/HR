@@ -1,0 +1,42 @@
+name: v1.2 2025 acquisition lineage audit
+
+on:
+  push:
+    branches:
+      - feat/v1.2-trustworthy-rebuild
+    paths:
+      - '.github/workflows/v12-2025-acquisition-lineage-audit.yml'
+  workflow_dispatch:
+
+jobs:
+  audit-acquisition-lineage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inspect original code bundle inventory
+        run: |
+          set -euxo pipefail
+          echo '=== 00_code_tests_reports inventory ==='
+          tar -tzf package_bundles/00_code_tests_reports.tar.gz | sort | sed -n '1,500p'
+          echo '=== manifest/reconstruction inventory ==='
+          tar -tzf package_bundles/99_manifest_and_reconstruction.tar.gz | sort
+
+      - name: Extract original code/reports only
+        run: |
+          set -euxo pipefail
+          rm -rf work
+          mkdir -p work
+          tar -xzf package_bundles/00_code_tests_reports.tar.gz -C work
+          find work -type f | sort
+
+      - name: Print acquisition code and logs references
+        run: |
+          set -euxo pipefail
+          find work -type f \( -iname '*acquire*' -o -iname '*download*' -o -iname '*log*' -o -iname '*report*' \) -print | sort
+          grep -RniE 'baseballsavant|statcast|hfGT|game_type|re_chunk|still capped|2015-2025|2025|bip_all|launch_speed' work | head -n 800 || true
+          for f in $(find work -type f -iname '*acquire*.py' | sort); do
+            echo "===== $f ====="
+            sed -n '1,420p' "$f"
+          done
+          echo 'ACQUISITION_LINEAGE_AUDIT_ONLY_NO_2025_DATA_READ'
