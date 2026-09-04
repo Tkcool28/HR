@@ -56,7 +56,16 @@ jobs:
           sudo mkdir -p /workspace
           sudo ln -sfn "$GITHUB_WORKSPACE" /workspace/hr_model
 
-      - name: Inventory checked-in parquet files
+      - name: Materialize uploaded package bundles when present
+        shell: bash
+        run: |
+          if [[ -d package_bundles ]] && compgen -G 'package_bundles/*.tar.gz' > /dev/null; then
+            bash tools/materialize_package_bundles.sh .
+          else
+            echo 'No package_bundles/*.tar.gz present; continuing with repository-resident files only.'
+          fi
+
+      - name: Inventory parquet files
         run: python tools/inspect_parquet.py --root .
 
       - name: Check whether full packaged data is available
@@ -86,7 +95,7 @@ jobs:
             echo "full_data=true" >> "$GITHUB_OUTPUT"
           else
             echo "full_data=false" >> "$GITHUB_OUTPUT"
-            echo "Full data-backed tests are intentionally not claimed because heavyweight packaged Parquets are absent from ordinary Git history."
+            echo "Full data-backed tests are intentionally not claimed because heavyweight packaged Parquets are absent."
           fi
 
       - name: Run full packaged integrity tests
@@ -101,4 +110,4 @@ jobs:
         if: steps.data.outputs.full_data != 'true'
         run: |
           echo 'CODE CI PASSED, BUT FULL MODEL/DATA TESTS DID NOT RUN.'
-          echo 'Heavyweight Parquet artifacts must be supplied to the runner before this job can validate the packaged model.'
+          echo 'Upload the repackaged tar.gz files under package_bundles/ to activate reconstruction and full testing.'
