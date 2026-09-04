@@ -1,0 +1,44 @@
+name: v1.2 season boundary audit
+
+on:
+  push:
+    branches: [feat/v1.2-correction-audit]
+    paths: ['.github/workflows/v12-season-boundary-audit.yml']
+  workflow_dispatch:
+
+jobs:
+  season-boundary:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'pandas==2.2.3' 'pyarrow>=16,<22'
+      - name: Reconstruct inputs
+        run: |
+          set -euxo pipefail
+          mkdir -p base delivered /tmp/v12meta
+          tar -xzf package_bundles/01_curated_small_and_splits.tar.gz -C base
+          tar -xzf package_bundles/v1.2_correction/99_v12_manifest_reconstruction.tar.gz -C /tmp/v12meta
+          bash /tmp/v12meta/reconstruct_v12_correction.sh package_bundles/v1.2_correction delivered
+      - name: Diagnose late-season/postseason rows
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          g=pd.read_parquet('base/data/curated/game.parquet')
+          f=pd.read_parquet('delivered/hr_model/features/v1.2/game_features.parquet', columns=['game_pk','game_date','split'])
+          pa=pd.read_parquet('delivered/hr_model/data/curated/pa_v12.parquet', columns=['game_pk','game_date'])
+          for name,df in [('game',g),('features',f),('pa',pa)]:
+              d=pd.to_datetime(df.game_date)
+              df=df.copy(); df['year']=d.dt.year; df['md']=d.dt.strftime('%m-%d')
+              # Oct 8+ is safely postseason for all 2015-2024 MLB seasons.
+              late=df[d.dt.strftime('%m-%d') >= '10-08']
+              print('\n===',name,'===')
+              print('rows',len(df),'unique games',df.game_pk.nunique(),'max date',d.max())
+              print('Oct08+ rows',len(late),'unique games',late.game_pk.nunique())
+              if len(late):
+                  print(late.groupby('year').agg(rows=('game_pk','size'),games=('game_pk','nunique')).to_string())
+                  print('latest examples')
+                  print(late[['game_pk','game_date']].drop_duplicates().sort_values('game_date').tail(20).to_string(index=False))
+          PY
