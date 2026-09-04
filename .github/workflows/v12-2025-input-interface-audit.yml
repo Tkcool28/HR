@@ -1,0 +1,50 @@
+name: v1.2 2025 input interface audit
+
+on:
+  push:
+    branches:
+      - feat/v1.2-trustworthy-rebuild
+    paths:
+      - '.github/workflows/v12-2025-input-interface-audit.yml'
+      - 'docs/v12_2025_one_shot_freeze_contract_2026-09-04.md'
+  workflow_dispatch:
+
+jobs:
+  audit-input-interface:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract delivered v1.2 code only
+        run: |
+          set -euxo pipefail
+          rm -rf work
+          mkdir -p work
+          tar -xzf package_bundles/v1.2_correction/00_v12_code_tests_reports.tar.gz -C work
+          find work -maxdepth 5 -type f | sort
+
+      - name: Inspect raw pitch-file interface
+        run: |
+          set -euxo pipefail
+          echo '=== build_pa_v12.py raw references ==='
+          grep -nE 'RAW|raw|glob|parquet|year|statcast|pitch' work/hr_model/src/data/build_pa_v12.py | head -n 180 || true
+          echo '=== build_pitch_level_v12.py raw references ==='
+          grep -nE 'RAW|raw|glob|parquet|year|statcast|pitch' work/hr_model/src/data/build_pitch_level_v12.py | head -n 180 || true
+          echo '=== source headers ==='
+          sed -n '1,180p' work/hr_model/src/data/build_pa_v12.py
+          sed -n '1,180p' work/hr_model/src/data/build_pitch_level_v12.py
+
+      - name: Inspect sealed split archive names without extracting holdout data
+        run: |
+          set -euxo pipefail
+          tar -tzf package_bundles/01_curated_small_and_splits.tar.gz | sort | grep -E 'split|holdout|2025|game' || true
+
+      - name: Confirm no 2025 raw bundle is already tracked
+        run: |
+          set -euxo pipefail
+          if find package_bundles -type f | grep -E '2025|holdout' ; then
+            echo 'Tracked path with 2025/holdout name found; review before execution.'
+          else
+            echo 'No tracked package path named 2025/holdout.'
+          fi
+          echo 'INPUT_INTERFACE_AUDIT_ONLY_NO_2025_OUTCOMES_READ'
