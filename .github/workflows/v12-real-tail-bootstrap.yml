@@ -8,6 +8,7 @@ on:
       - 'experiments/v12_paired_tail_bootstrap.py'
       - 'experiments/v12_score_frozen_tail_model.py'
       - 'experiments/v12_edge_localization.py'
+      - 'experiments/v12_disagreement_strata_test.py'
       - 'experiments/contracts/v12_full73_aggressive.json'
       - 'experiments/contracts/v12_pruned62_aggressive.json'
       - 'trusted_v12/prepare_pruned62_challenger.py'
@@ -110,6 +111,15 @@ jobs:
             --reps 10000 \
             --seed 20260904
 
+      - name: Test all predeclared disagreement strata together
+        run: |
+          python experiments/v12_disagreement_strata_test.py \
+            --input /workspace/hr_model/bootstrap/full73_edge_localization.parquet \
+            --out /workspace/hr_model/bootstrap/full73_disagreement_strata.json \
+            --reps 10000 \
+            --perm-reps 10000 \
+            --seed 20260904
+
       - name: Bootstrap champion versus obvious-power proxy
         run: |
           python experiments/v12_paired_tail_bootstrap.py \
@@ -137,10 +147,17 @@ jobs:
           e=json.load(open('/workspace/hr_model/bootstrap/full73_edge_localization.json'))
           assert e['design']['bootstrap_replicates']==10000
           assert e['design']['holdout_2025_read'] is False
+          s=json.load(open('/workspace/hr_model/bootstrap/full73_disagreement_strata.json'))
+          assert s['design']['bootstrap_replicates']==10000
+          assert s['design']['randomization_replicates']==10000
+          assert s['design']['holdout_2025_read'] is False
+          assert set(s['combined_2023_2024'])=={
+            'obvious_rank_5_8','obvious_rank_9_16','obvious_rank_17_plus'
+          }
           q=json.load(open('/workspace/hr_model/bootstrap/full73_vs_obvious_power_bootstrap.json'))
           assert q['design']['primary_replicates']==10000
           assert q['design']['holdout_2025_read'] is False
-          print('real tail bootstrap + edge-localization contract PASS; 2025 NOT READ')
+          print('real tail bootstrap + edge-localization + disagreement contract PASS; 2025 NOT READ')
           PY
 
       - name: Print key bootstrap results
@@ -150,6 +167,7 @@ jobs:
           test -f /workspace/hr_model/bootstrap/pruned62_predictions.metrics.json && cat /workspace/hr_model/bootstrap/pruned62_predictions.metrics.json || true
           test -f /workspace/hr_model/bootstrap/full73_vs_pruned62_bootstrap.json && cat /workspace/hr_model/bootstrap/full73_vs_pruned62_bootstrap.json || true
           test -f /workspace/hr_model/bootstrap/full73_edge_localization.json && cat /workspace/hr_model/bootstrap/full73_edge_localization.json || true
+          test -f /workspace/hr_model/bootstrap/full73_disagreement_strata.json && cat /workspace/hr_model/bootstrap/full73_disagreement_strata.json || true
           test -f /workspace/hr_model/bootstrap/full73_vs_obvious_power_bootstrap.json && cat /workspace/hr_model/bootstrap/full73_vs_obvious_power_bootstrap.json || true
 
       - name: Upload frozen bootstrap evidence
