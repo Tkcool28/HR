@@ -1,0 +1,98 @@
+name: v1.2 nearest-rank matched disagreement
+
+on:
+  push:
+    branches:
+      - feat/v1.2-trustworthy-rebuild
+    paths:
+      - 'experiments/v12_nearest_rank_matched_test.py'
+      - 'experiments/test_v12_nearest_rank_matched.py'
+      - 'docs/v12_matched_pair_precommit_2026-09-04.md'
+      - '.github/workflows/v12-nearest-rank-matched.yml'
+  workflow_dispatch:
+
+jobs:
+  nearest-rank-matched:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install inference dependencies
+        run: |
+          python -m pip install 'numpy>=1.26,<3' 'pandas>=2.2,<3' 'pyarrow>=16,<22'
+
+      - name: Run synthetic matched-pair controls
+        run: python experiments/test_v12_nearest_rank_matched.py
+
+      - name: Download frozen 2023-2024 edge evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: v12-frozen-real-tail-bootstrap
+          path: frozen
+          github-token: ${{ github.token }}
+          repository: Tkcool28/HR
+          run-id: 33877537006
+
+      - name: Locate and verify frozen edge evidence
+        run: |
+          set -euxo pipefail
+          EDGE=$(find frozen -type f -name 'full73_edge_localization.parquet' -print -quit)
+          test -n "$EDGE"
+          echo "EDGE=$EDGE" >> "$GITHUB_ENV"
+          export EDGE
+          python - <<'PY'
+          import os, pandas as pd
+          f=pd.read_parquet(os.environ['EDGE'])
+          assert len(f)==86112, len(f)
+          assert f.year.isin([2023,2024]).all()
+          assert 2025 not in set(f.year)
+          assert not f.duplicated(['game_pk','batter_id']).any()
+          assert {'model_top4','obvious_rank','hr_in_game'}.issubset(f.columns)
+          print('frozen edge evidence PASS; 2025 NOT READ')
+          PY
+
+      - name: Run precommitted nearest-rank matched test
+        run: |
+          mkdir -p out
+          python experiments/v12_nearest_rank_matched_test.py \
+            --input "$EDGE" \
+            --out-json out/full73_nearest_rank_matched.json \
+            --out-pairs out/full73_nearest_rank_pairs.parquet \
+            --reps 10000 \
+            --seed 20260904
+
+      - name: Verify matched result contract
+        run: |
+          python - <<'PY'
+          import json
+          p=json.load(open('out/full73_nearest_rank_matched.json'))
+          d=p['design']
+          assert d['holdout_2025_read'] is False
+          assert d['precommitted_observed_magnitude_floor']==0.05
+          assert d['precommitted_strong_ci_floor']==0.02
+          assert set(p['combined_2023_2024'])=={
+            'obvious_rank_5_8','obvious_rank_9_16','obvious_rank_17_plus'
+          }
+          assert set(p['by_year'])=={'2023','2024'}
+          for item in p['combined_2023_2024'].values():
+              assert item['date_cluster_bootstrap']['n_replicates']==10000
+              assert 'holm_adjusted_p_across_3_strata' in item['exact_matched_binary_test']
+          print('nearest-rank matched result PASS; 2025 NOT READ')
+          PY
+
+      - name: Print matched result
+        run: cat out/full73_nearest_rank_matched.json
+
+      - name: Upload matched evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v12-full73-nearest-rank-matched
+          if-no-files-found: error
+          path: |
+            out/full73_nearest_rank_matched.json
+            out/full73_nearest_rank_pairs.parquet
