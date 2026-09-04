@@ -1,6 +1,11 @@
 name: v1.2 reproduction audit
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/v12-reproduction.yml'
   pull_request:
     branches:
       - main
@@ -16,14 +21,15 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout PR head
+      - name: Checkout v1.2 audit branch
         uses: actions/checkout@v4
+        with:
+          ref: feat/v1.2-reproduction-audit
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: pip
 
       - name: Install v1.2 build dependencies
         run: |
