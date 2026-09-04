@@ -1,0 +1,34 @@
+name: OddsPapi historical MLB HR coverage probe
+
+on:
+  push:
+    branches:
+      - feat/v1.2-trustworthy-rebuild
+    paths:
+      - 'experiments/oddspapi_history_coverage_probe.py'
+      - '.github/workflows/oddspapi-history-coverage-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install probe dependency
+        run: python -m pip install 'requests>=2.32,<3'
+      - name: Probe historical MLB HR archive depth
+        env:
+          ODDSPAPI_API_KEY: ${{ secrets.ODDSPAPI_API_KEY }}
+        run: |
+          mkdir -p out
+          python experiments/oddspapi_history_coverage_probe.py --out out/oddspapi_history_coverage.json
+      - name: Upload sanitized probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: oddspapi-history-coverage-probe
+          path: out/oddspapi_history_coverage.json
+          if-no-files-found: error
