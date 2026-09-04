@@ -112,6 +112,18 @@ For the delivered 54-feature matrix:
 - exact duplicate numeric active feature pairs: 0
 - park factors equal neutral 100.0 for all 2015 rows and essentially none from 2016 onward, consistent with no prior seasons being available for 2015.
 
+### Feature-surface reduction / methodology drift
+
+v1.1 had 113 active features; the corrected v1.2 package has 54. A direct list diff shows:
+
+- 31 feature names are retained in both versions.
+- 82 v1.1 features are absent from v1.2.
+- 23 feature names are new in v1.2.
+
+The v1.2 repair report explicitly documents this as intentional rather than accidental. It dropped the batted-ball / QoC block (barrel rate, xwOBA, EV, hard-hit, launch-angle, ISO), BVP features, and other v1.1 features to reduce repair complexity, while adding corrected pitcher-usage/top-pitch features.
+
+This transparency is positive, but the consequence is important: v1.2 is not a controlled "v1.1 with leakage fixed" experiment. It is a materially different feature model. Any later performance difference between v1.1 and v1.2 will confound leakage repair with feature removal/addition unless the clean unaffected v1.1 features are deliberately restored or an ablation design is used.
+
 ### Pitch-type semantic mismatch
 
 `pitcher_top_pitch` is determined from all individual pitches thrown in the prior 30-day window, which is appropriate for an arsenal-usage feature. However, the batter/pitcher `*_hr_per_pa_vs_<PT>_30d` features use `terminal_pitch_type` from each PA. They therefore estimate HR rate among PAs that **ended** on pitch type PT, not performance across all exposures to PT.
@@ -169,4 +181,4 @@ However, the delivered acquisition logs report `0 still capped after re-chunking
 
 ## Current audit verdict
 
-The v1.2 correction substantially improves the temporal feature engine and correctly repairs the pitch-usage/top-pitch bug. The code is reproducible from historical inputs and the rebuilt feature matrix is structurally healthy. However, the batting-universe proxy is a critical conceptual defect that materially changes the sampled population; historical venue identity is also wrong for known stadium changes and special-site games; the active feature list is not trainer-compatible; and the inherited training/evaluation architecture reuses the 2023-2024 validation block too aggressively to support clean calibrated-performance claims. No model performance claim should be accepted from this v1.2 matrix until the target-universe and park-identity issues are repaired and the evaluation design separates tuning, calibration fitting, and final assessment.
+The v1.2 correction substantially improves the temporal feature engine and correctly repairs the pitch-usage/top-pitch bug. The code is reproducible from historical inputs and the rebuilt feature matrix is structurally healthy. However, the batting-universe proxy is a critical conceptual defect that materially changes the sampled population; historical venue identity is also wrong for known stadium changes and special-site games; the active feature list is not trainer-compatible; the inherited training/evaluation architecture reuses the 2023-2024 validation block too aggressively to support clean calibrated-performance claims; and the v1.2 repair materially changes the feature surface, so it is not a controlled apples-to-apples repair of v1.1. No model performance claim should be accepted from this v1.2 matrix until the target-universe and park-identity issues are repaired and the evaluation design separates tuning, calibration fitting, and final assessment.
