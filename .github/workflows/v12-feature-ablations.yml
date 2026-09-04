@@ -83,8 +83,11 @@ jobs:
           }
           JSON
 
-      - name: Run frozen feature-family ablations and rankings
+      - name: Run frozen feature-family ablations
         run: python experiments/v12_feature_family_ablations.py
+
+      - name: Run daily-slate ranking diagnostics
+        run: python experiments/v12_daily_ranking_diagnostics.py
 
       - name: Upload ablation evidence
         if: always()
