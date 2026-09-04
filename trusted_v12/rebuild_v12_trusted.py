@@ -73,10 +73,21 @@ def fetch_context() -> pd.DataFrame:
                 })
         if not (800 <= len(yr_rows) <= 2600):
             raise RuntimeError(f"implausible regular schedule count {year}: {len(yr_rows)}")
-        log(f"{year}: {len(yr_rows):,} regular schedule games")
+        log(f"{year}: {len(yr_rows):,} regular schedule records")
         rows.extend(yr_rows)
     c = pd.DataFrame(rows)
-    if c.game_pk.duplicated().any(): raise RuntimeError('duplicate game_pk in context')
+    dup = c[c.game_pk.duplicated(keep=False)].copy()
+    if not dup.empty:
+        identity = ['season','game_type','home_team_name','away_team_name']
+        conflicts = dup.groupby('game_pk')[identity].nunique(dropna=False).max(axis=1)
+        if conflicts.gt(1).any():
+            bad = conflicts[conflicts.gt(1)].index.tolist()[:20]
+            raise RuntimeError(f"conflicting duplicate schedule identities: {bad}")
+        log(f"collapsing {len(dup):,} duplicate schedule records across {dup.game_pk.nunique():,} gamePk values")
+        # Postponed/rescheduled bookkeeping can expose the same gamePk on more
+        # than one schedule date. Current schedule data is sorted by date and
+        # we retain the latest record for the final played context.
+        c = c.sort_values(['game_pk','game_date']).drop_duplicates('game_pk', keep='last')
     if set(c.game_type.unique()) != {'R'}: raise RuntimeError('non-R game in context')
     if c.venue_id.isna().any(): raise RuntimeError('missing venue_id')
     c['game_pk'] = c.game_pk.astype('int64'); c['venue_id'] = c.venue_id.astype('int64')
