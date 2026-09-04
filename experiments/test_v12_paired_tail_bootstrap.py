@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from experiments import v12_paired_tail_bootstrap as boot
+SPEC = importlib.util.spec_from_file_location(
+    'v12_paired_tail_bootstrap',
+    Path(__file__).with_name('v12_paired_tail_bootstrap.py'),
+)
+boot = importlib.util.module_from_spec(SPEC)
+assert SPEC.loader is not None
+SPEC.loader.exec_module(boot)
 
 
 def synthetic_pair(n_days: int = 120):
