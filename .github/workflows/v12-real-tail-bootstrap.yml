@@ -7,6 +7,7 @@ on:
     paths:
       - 'experiments/v12_paired_tail_bootstrap.py'
       - 'experiments/v12_score_frozen_tail_model.py'
+      - 'experiments/v12_edge_localization.py'
       - 'experiments/contracts/v12_full73_aggressive.json'
       - 'experiments/contracts/v12_pruned62_aggressive.json'
       - 'trusted_v12/prepare_pruned62_challenger.py'
@@ -99,7 +100,29 @@ jobs:
             --game-reps 500 \
             --seed 20260904
 
-      - name: Verify bootstrap contract
+      - name: Localize differentiated champion edge
+        run: |
+          python experiments/v12_edge_localization.py \
+            --predictions /workspace/hr_model/bootstrap/full73_predictions.parquet \
+            --out-json /workspace/hr_model/bootstrap/full73_edge_localization.json \
+            --out-parquet /workspace/hr_model/bootstrap/full73_edge_localization.parquet \
+            --baseline-out /workspace/hr_model/bootstrap/obvious_power_proxy_predictions.parquet \
+            --reps 10000 \
+            --seed 20260904
+
+      - name: Bootstrap champion versus obvious-power proxy
+        run: |
+          python experiments/v12_paired_tail_bootstrap.py \
+            --a /workspace/hr_model/bootstrap/obvious_power_proxy_predictions.parquet \
+            --b /workspace/hr_model/bootstrap/full73_predictions.parquet \
+            --label-a obvious_power_proxy \
+            --label-b full73_aggressive \
+            --out /workspace/hr_model/bootstrap/full73_vs_obvious_power_bootstrap.json \
+            --reps 10000 \
+            --game-reps 0 \
+            --seed 20260924
+
+      - name: Verify bootstrap and edge contracts
         run: |
           python - <<'PY'
           import json
@@ -111,7 +134,13 @@ jobs:
           assert set(p['by_year'])=={'2023','2024'}
           for scope in [p['combined_2023_2024'], p['by_year']['2023'], p['by_year']['2024']]:
               assert set(scope)=={'daily_top5pct','daily_top4'}
-          print('real tail bootstrap contract PASS; 2025 NOT READ')
+          e=json.load(open('/workspace/hr_model/bootstrap/full73_edge_localization.json'))
+          assert e['design']['bootstrap_replicates']==10000
+          assert e['design']['holdout_2025_read'] is False
+          q=json.load(open('/workspace/hr_model/bootstrap/full73_vs_obvious_power_bootstrap.json'))
+          assert q['design']['primary_replicates']==10000
+          assert q['design']['holdout_2025_read'] is False
+          print('real tail bootstrap + edge-localization contract PASS; 2025 NOT READ')
           PY
 
       - name: Print key bootstrap results
@@ -120,6 +149,8 @@ jobs:
           test -f /workspace/hr_model/bootstrap/full73_predictions.metrics.json && cat /workspace/hr_model/bootstrap/full73_predictions.metrics.json || true
           test -f /workspace/hr_model/bootstrap/pruned62_predictions.metrics.json && cat /workspace/hr_model/bootstrap/pruned62_predictions.metrics.json || true
           test -f /workspace/hr_model/bootstrap/full73_vs_pruned62_bootstrap.json && cat /workspace/hr_model/bootstrap/full73_vs_pruned62_bootstrap.json || true
+          test -f /workspace/hr_model/bootstrap/full73_edge_localization.json && cat /workspace/hr_model/bootstrap/full73_edge_localization.json || true
+          test -f /workspace/hr_model/bootstrap/full73_vs_obvious_power_bootstrap.json && cat /workspace/hr_model/bootstrap/full73_vs_obvious_power_bootstrap.json || true
 
       - name: Upload frozen bootstrap evidence
         if: always()
