@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from experiments.v12_top5_half_seasonality import (
+from v12_top5_half_seasonality import (
     phase_from_date,
     deterministic_top5_flags,
     daily_selected_counts,
@@ -23,12 +23,8 @@ def synthetic_pair():
         for di, day in enumerate(dates):
             second = day.month >= 7
             for batter in range(1, 21):
-                # Obvious always selects batter 1.
                 score_o = 2.0 if batter == 1 else 1.0 - batter / 100.0
-                # Full73: same selection first half; selects batter 2 second half.
                 score_f = 2.0 if (batter == (2 if second else 1)) else 1.0 - batter / 100.0
-                # First half: selected batter 1 HR on 1/5 dates for both.
-                # Second half: obvious batter 1 HR on 1/10 dates; full batter 2 HR on 3/10 dates.
                 if not second:
                     hr = int(batter == 1 and di % 5 == 0)
                 else:
@@ -61,7 +57,7 @@ def test_deterministic_top5_exact_size():
         "p_raw": np.linspace(0, 1, 21),
     })
     flags = deterministic_top5_flags(d)
-    assert flags.sum() == 2  # ceil(21 * .05)
+    assert flags.sum() == 2
 
 
 def test_positive_second_half_interaction():
@@ -71,11 +67,9 @@ def test_positive_second_half_interaction():
     full73["phase"] = phase_from_date(full73.game_date)
     od = daily_selected_counts(obvious)
     fd = daily_selected_counts(full73)
-
     first = phase_bootstrap(od, fd, "FIRST_HALF", reps=2000, seed=11)
     second = phase_bootstrap(od, fd, "SECOND_HALF", reps=2000, seed=12)
     inter = interaction_bootstrap(od, fd, reps=2000, seed=13)
-
     assert abs(first["observed_lift_full73_minus_obvious"]) < 1e-12
     assert second["observed_lift_full73_minus_obvious"] > 0.15
     assert inter["observed_interaction"] > 0.15
