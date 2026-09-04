@@ -1,0 +1,45 @@
+name: v1.2 historical park identity audit
+
+on:
+  push:
+    branches: [feat/v1.2-correction-audit]
+    paths: ['.github/workflows/v12-park-identity-audit.yml']
+  workflow_dispatch:
+
+jobs:
+  park-identity:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'pandas==2.2.3' 'pyarrow>=16,<22'
+      - name: Reconstruct BIP and v1.2 features
+        run: |
+          set -euxo pipefail
+          mkdir -p base delivered /tmp/v12meta
+          tar -xzf package_bundles/02_bip_all.tar.gz -C base
+          tar -xzf package_bundles/v1.2_correction/99_v12_manifest_reconstruction.tar.gz -C /tmp/v12meta
+          bash /tmp/v12meta/reconstruct_v12_correction.sh package_bundles/v1.2_correction delivered
+      - name: Historical venue diagnostics
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          bip=pd.read_parquet('base/data/raw/bip_all.parquet', columns=['game_pk','game_date','home_team','park_id'])
+          bip['year']=pd.to_datetime(bip.game_date).dt.year
+          print('=== STATIC TEAM->PARK EXPOSURE COUNTS ===')
+          for team in ['ATL','TEX','TOR']:
+              sub=bip[bip.home_team.eq(team)]
+              print('\n',team)
+              print(sub.groupby(['year','park_id']).size().to_string())
+              print('BIPs total',len(sub),'games',sub.game_pk.nunique())
+          print('\n=== SPECIAL-SITE RISK ===')
+          print('The pipeline contains no actual venue/stadium identifier; park_id is derived from home_team, so neutral/special-site games cannot be distinguished from the club home park.')
+          f=pd.read_parquet('delivered/hr_model/features/v1.2/game_features.parquet', columns=['game_pk','game_date','home_team','park_id'])
+          f['year']=pd.to_datetime(f.game_date).dt.year
+          for team in ['ATL','TEX','TOR']:
+              sub=f[f.home_team.eq(team)]
+              print('\nfeature targets',team,'rows',len(sub),'games',sub.game_pk.nunique())
+              print(sub.groupby(['year','park_id']).size().to_string())
+          PY
