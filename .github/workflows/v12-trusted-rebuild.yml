@@ -12,7 +12,7 @@ on:
 jobs:
   rebuild-train:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -68,8 +68,8 @@ jobs:
           python /workspace/hr_model/tests/test_no_lookahead_v12.py
           python /workspace/hr_model/tests/test_negative_control.py
 
-      - name: Train with separated tune calibration assessment
-        run: python trusted_v12/train_v12_trusted.py
+      - name: Aggressive 50-trial chronological Optuna training
+        run: python trusted_v12/train_v12_aggressive_candidate.py
 
       - name: Trusted end-to-end tests
         run: pytest -q trusted_v12/test_trusted_v12.py trusted_v12/test_qoc_trusted.py
