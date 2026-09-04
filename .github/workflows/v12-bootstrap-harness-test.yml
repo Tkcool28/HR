@@ -1,0 +1,25 @@
+name: v1.2 tail bootstrap harness test
+
+on:
+  push:
+    branches:
+      - feat/v1.2-trustworthy-rebuild
+    paths:
+      - 'experiments/v12_paired_tail_bootstrap.py'
+      - 'experiments/test_v12_paired_tail_bootstrap.py'
+      - '.github/workflows/v12-bootstrap-harness-test.yml'
+  workflow_dispatch:
+
+jobs:
+  test-bootstrap:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install bootstrap test dependencies
+        run: python -m pip install 'numpy>=1.26,<3' 'pandas>=2.2,<3' 'pyarrow>=16,<22' 'pytest>=8,<9'
+      - name: Run bootstrap synthetic controls
+        run: pytest -q experiments/test_v12_paired_tail_bootstrap.py
