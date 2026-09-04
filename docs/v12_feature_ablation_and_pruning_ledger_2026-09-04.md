@@ -2,11 +2,11 @@
 
 ## Scope
 
-This ledger records the feature-family destruction tests, daily-slate ranking diagnostics, fine-grained subfamily ablations, and targeted pruning candidates performed on the trusted 2015-2024 v1.2 rebuild.
+This ledger records the feature-family destruction tests, daily-slate ranking diagnostics, fine-grained subfamily ablations, targeted pruning candidates, equal-retune challenger test, and bootstrap gate performed on the trusted 2015-2024 v1.2 rebuild.
 
 **2025 was not read or evaluated and remains sealed.**
 
-All comparisons below use the same repaired target universe and leakage-safe feature construction. Unless explicitly stated otherwise, ablation/pruning comparisons use the frozen winning aggressive XGBoost hyperparameters and 194 boosting rounds from the 73-feature champion. This deliberately prevents a removed feature family from being rescued by retuning.
+All comparisons below use the same repaired target universe and leakage-safe feature construction. Unless explicitly stated otherwise, ablation/pruning comparisons use the frozen winning aggressive XGBoost hyperparameters and 194 boosting rounds from the 73-feature champion. This deliberately prevents a removed feature family from being rescued by retuning. The final 62-feature challenger was then given its own equal 50-trial, three-fold chronological Optuna retune before the architecture decision.
 
 ## Frozen 73-feature reference
 
@@ -102,45 +102,74 @@ The two strongest passenger candidates were then removed alone and in combinatio
 | prune pitcher-vs-pitch HR + batter long xwOBA | 62 | 0.102509 | 0.6173 | 0.00637 | 25.07% | 26.74% | 24.23% | 22.39% | 21.76% |
 | prune usage + pitcher-vs-pitch HR + batter long xwOBA | 53 | 0.102474 | 0.6175 | 0.00634 | 27.58% | 26.04% | 24.23% | 22.98% | 22.29% |
 
-### Challenger decision
+### Frozen-parameter challenger decision
 
-The **62-feature `prune_usage_plus_batter_xwoba_long` candidate** is promoted to a *challenger only* because, without any retuning, it:
+The **62-feature `prune_usage_plus_batter_xwoba_long` candidate** earned a full retune because, without retuning, it improved top-4/day from 24.23% to 25.07% and daily top-5% from 21.69% to 21.89% with effectively unchanged global metrics.
 
-- improves top-4/day from 24.23% to 25.07%
-- improves daily top-5% from 21.69% to 21.89%
-- improves #1/day from 26.46% to 27.02%
-- leaves AUC effectively unchanged
-- leaves Brier effectively unchanged/slightly better
-- improves ECE from 0.00626 to 0.00620
+This was a challenger result only, not a promotion.
 
-It is **not yet the champion**. It must receive the same 50-trial, three-fold chronological Optuna treatment as the full model before any architecture freeze.
+## Equal-retune challenge
 
-The 55-feature candidate with usage + pitcher-vs-pitch HR removed has attractive global metrics and #1/day, but materially hurts top-4/day; it is not the preferred shortlist challenger.
+The 62-feature candidate received the same training protocol as the full 73-feature model:
+
+- 50 seeded multivariate TPE Optuna trials
+- expanding chronological tuning folds: 2015-2018 -> 2019, 2015-2019 -> 2020, 2015-2020 -> 2021
+- objective: mean fold Brier
+- 2022 calibration only
+- 2023-2024 development assessment only
+- 2025 not read
+
+The tuned 62-feature winner used 275 boosting rounds and had tune mean Brier 0.1099133.
+
+Final equal-retune comparison:
+
+| Model | Features | Cal Brier | AUC | ECE | Daily top-5% | Top-4/day | #1/day |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **full73 aggressive** | **73** | **0.102500** | **0.6175** | **0.00626** | **21.69%** | **24.23%** | **26.46%** |
+| tuned pruned62 | 62 | 0.102554 | 0.6167 | 0.00643 | 21.65% | 23.82% | 25.91% |
+
+Tuned pruned62 year split:
+
+- 2023 daily top-5%: 22.38%; top-4/day: 24.72%
+- 2024 daily top-5%: 20.90%; top-4/day: 22.91%
+
+### Architecture decision
+
+**The 73-feature aggressively tuned model remains champion.**
+
+The apparent 62-feature frozen-parameter improvement did **not** survive a fair retune. This is evidence against pruning those 11 features on the basis of the earlier shortlist spike. The feature-rich architecture is retained for the next stage.
+
+The failed promotion is itself useful evidence: the procedure rejected a feature cut that looked favorable under borrowed hyperparameters but weakened after equal optimization.
 
 ## Bootstrap gate
 
-The paired bootstrap proposed for the actionable tail is intentionally deferred until the feature architecture is frozen enough to avoid repeatedly testing moving targets.
+Feature architecture is now frozen enough to run paired actionable-tail inference without repeatedly testing a moving target.
 
-Planned bootstrap design after the 62-feature challenger is retuned and a champion is selected:
+Frozen bootstrap design:
 
 1. Rank by raw XGBoost score within each daily slate.
 2. Preserve all batters from sampled clusters rather than resampling batter rows independently.
 3. Primary cluster unit: **game date / slate day**, because the deployed decision is a within-day ranking and all candidates on a slate share the cutoff competition.
-4. Secondary sensitivity analysis: **game-level cluster bootstrap**, preserving the 18 batter rows per game.
+4. Secondary sensitivity analysis: **game-level cluster bootstrap**, preserving the full 18-batter game cluster.
 5. Recompute each model's daily top-5% independently inside every bootstrap replicate.
 6. Also recompute top-4/day, because that is the closest match to the actual betting workflow.
-7. Use at least 10,000 paired replicates with a fixed RNG seed.
+7. Use 10,000 paired date-cluster replicates with a fixed RNG seed.
 8. Report observed delta, bootstrap median/mean delta, 95% percentile CI, and Pr(delta > 0).
-9. Report 2023, 2024, and combined 2023-2024 sensitivity results.
-10. Do not touch 2025.
+9. Report 2023, 2024, and combined 2023-2024 date-cluster results.
+10. Run a whole-game-cluster sensitivity analysis on the combined sample.
+11. Do not touch 2025.
+
+Synthetic positive/negative controls for both the date-cluster and whole-game-cluster code paths pass in CI before real inference.
 
 ## Current status
 
 - trusted data/target pipeline: green
-- 73-feature aggressive model: frozen reference
+- **73-feature aggressive model: frozen champion**
 - broad family ablations: complete
 - fine-grained subfamily ablations: complete
 - targeted pruning: complete
-- 62-feature challenger: **eligible for full aggressive retune**
-- paired tail bootstrap: **next after champion selection**
+- 62-feature equal retune: complete; challenger rejected
+- paired tail bootstrap harness: green on synthetic controls
+- paired tail bootstrap on frozen real models: next
+- edge-localization analysis versus simple/obvious-pick baselines: follows bootstrap
 - 2025 holdout: **sealed**
