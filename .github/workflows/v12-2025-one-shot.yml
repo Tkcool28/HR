@@ -1,3 +1,4 @@
+# Re-run note: 2025 one-shot contract unchanged; retry after import-path plumbing fix.
 name: v1.2 frozen 2025 one-shot holdout
 
 on:
