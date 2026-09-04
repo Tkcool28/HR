@@ -39,6 +39,7 @@ jobs:
           find frozen -maxdepth 4 -type f -print | sort
           EDGE=$(find frozen -type f -name 'full73_edge_localization.parquet' -print -quit)
           test -n "$EDGE"
+          export EDGE
           echo "EDGE=$EDGE" >> "$GITHUB_ENV"
           python - <<'PY'
           import os, pandas as pd
