@@ -104,7 +104,7 @@ Combined paired bootstrap for full73-only minus obvious-only:
 - 95% CI: **-4.60 to +3.19 pp**
 - Pr(delta>0): 35.51%
 
-So the differentiated top-four set as a whole is not yet an edge. This prevents interpreting the model's lower overlap as automatically valuable contrarian discovery.
+So the differentiated top-four set as a whole is not an edge. This prevents interpreting the model's lower overlap as automatically valuable contrarian discovery.
 
 ## Predeclared obvious-rank strata inside full73-only picks
 
@@ -116,9 +116,54 @@ Before observing the edge-localization result, full73-only selections were strat
 | 9-16 | 326 | 75 | 23.01% | 23.16% | 22.82% |
 | **17+** | **177** | **48** | **27.12%** | **28.32%** | **25.00%** |
 
-The 17+ stratum is a notable exploratory signal because it is both the least obvious group and directionally stable across the two years. It is **not promoted yet**: selecting the best-looking stratum after seeing three subgroup outcomes creates selection risk even though the bands themselves were predeclared.
+The 17+ stratum was treated as exploratory after the first look rather than promoted from the point estimate alone. A multiplicity-aware follow-up then evaluated all three predeclared bands together.
 
-Next test: evaluate all three bands together against non-model-selected hitters in the same obvious-power rank band, using paired 10,000-date clustered resampling and multiplicity-aware inference.
+## Multiplicity-aware same-band follow-up
+
+For each band, full73-selected hitters were compared with non-full73 hitters from the **same obvious-power rank band**. Inference used:
+
+- 10,000 slate-date bootstrap replicates;
+- 10,000 exact within-date hypergeometric label-randomization replicates;
+- one-sided alternative: full73-selected HR rate > same-band control HR rate;
+- Holm correction across all three predeclared bands.
+
+Combined 2023-2024:
+
+| Obvious rank | Selected N | Selected HR rate | Same-band control rate | Lift | 95% date-bootstrap CI | Pr(lift>0) | Holm-adjusted p |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 5-8 | 352 | 21.02% | 17.71% | +3.31 pp | [-1.74, +8.37] pp | 89.79% | 0.1064 |
+| **9-16** | **326** | **23.01%** | **17.60%** | **+5.41 pp** | **[+0.83, +10.27] pp** | **98.88%** | **0.0350** |
+| **17+** | **177** | **27.12%** | **11.23%** | **+15.89 pp** | **[+9.68, +22.36] pp** | **100.00%** | **0.00030** |
+
+The two deeper disagreement bands survive multiplicity control. Rank 5-8 is positive but unresolved.
+
+### Year stability of the deepest band
+
+Obvious-rank 17+ full73 promotions:
+
+- **2023:** 113 selected, 32 HR, **28.32%** vs 11.65% same-band controls; lift **+16.67 pp**; 95% date-bootstrap CI **+8.58 to +24.86 pp**
+- **2024:** 64 selected, 16 HR, **25.00%** vs 10.80% controls; lift **+14.20 pp**; 95% CI **+4.78 to +24.54 pp**
+
+Direction is positive and the yearly clustered intervals stay above zero in both seasons despite the smaller 2024 sample.
+
+### Context fingerprint in the deepest disagreement band
+
+For obvious-rank 17+ hitters, mean within-slate context percentiles were:
+
+| Context group | Full73 selected | Same-band controls | Difference |
+|---|---:|---:|---:|
+| park | **73.89%** | 49.72% | **+24.17 pp** |
+| recent batter form | **73.04%** | 48.08% | **+24.96 pp** |
+| pitcher vulnerability | **58.67%** | 50.19% | **+8.47 pp** |
+| pitch matchup | **54.79%** | 49.82% | **+4.97 pp** |
+
+This is consistent with what the model was built to do: promote a batter whom long-horizon power alone does not make obvious when the **current environment, recent contact quality, and opposing pitcher context** improve the HR setup.
+
+### Important remaining confound
+
+The same-band control is materially stronger than comparing against the whole slate, but it is not yet perfectly rank-matched. For example, a selected hitter with obvious-power rank 18 sits in the 17+ band alongside control hitters ranked 80 or 150. Some of the 17+ lift could therefore come from full73 selecting the better end of the long-horizon tail rather than from contextual information alone.
+
+**Do not promote a production hidden-pick rule until a same-slate nearest-rank matched test is run.** The next test pairs each full73 promotion with an unselected hitter of the nearest available obvious-power rank on the same date, without replacement, and uses paired binary-outcome inference plus slate-date bootstrap uncertainty.
 
 ## Context fingerprint of differentiated full73 picks
 
@@ -131,14 +176,15 @@ Within-day mean percentile scores:
 | pitcher vulnerability | 50.21% | 55.29% | **57.17%** | 46.92% |
 | pitch matchup | 50.21% | 59.34% | 55.72% | **57.66%** |
 
-The initial fingerprint suggests the model's differentiated promotions are characterized more by **park and pitcher vulnerability** than by simply stronger recent batter form. This is consistent with the earlier destructive ablation in which removing the two park features materially hurt top-four ranking.
+The initial fingerprint suggests the model's differentiated promotions are characterized more by **park and pitcher vulnerability** than by simply stronger long-horizon batter power. In the deepest 17+ disagreement band, recent form becomes a much stronger differentiator as well.
 
-This fingerprint is descriptive, not causal. The follow-up disagreement-strata test will determine whether the deepest promotions actually carry repeatable outcome separation before additional subgroup drilling.
+These fingerprints are descriptive, not causal. They are being used to understand what the model is recognizing, not to create post-hoc manual betting filters.
 
 ## Current verdict
 
 1. **Full73 remains the model architecture.** Equal retuning and clustered sensitivity do not support pruning to 62 features.
-2. **The model has a statistically resolved advantage over a batter-only obvious-power proxy in the daily top 5%.** This is currently the clearest practical shine zone.
+2. **The model has a statistically resolved advantage over a batter-only obvious-power proxy in the daily top 5%.** This remains the broadest defensible shine zone.
 3. **Exact top-4/day replacement is not supported.** The simple power proxy is slightly better overall there, with substantial 2023/2024 regime variation.
-4. **Deep-disagreement picks (obvious-power rank 17+) are the strongest differentiated discovery lead**, but require a multiplicity-aware follow-up before use as policy.
-5. 2025 remains sealed.
+4. **The model has statistically resolved differentiated discovery in the predeclared 9-16 and 17+ obvious-power rank bands after Holm multiplicity correction.** The 17+ development signal is especially large and positive in both years.
+5. **A nearest-rank same-slate match is still required before treating deep disagreement as an operational hidden-pick rule.** This explicitly tests whether the signal survives controlling the residual rank-position confound inside the broad bands.
+6. 2025 remains sealed.
