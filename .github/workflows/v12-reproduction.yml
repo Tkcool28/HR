@@ -1,0 +1,144 @@
+name: v1.2 reproduction audit
+
+on:
+  push:
+    branches:
+      - 'feat/v1.2-reproduction-audit'
+  workflow_dispatch:
+
+jobs:
+  reproduce-v12:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install v1.2 build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'pandas==2.2.3' 'numpy>=1.26,<3' 'pyarrow>=16,<22'
+
+      - name: Provide legacy workspace path
+        run: |
+          sudo mkdir -p /workspace
+          sudo ln -sfn "$GITHUB_WORKSPACE" /workspace/hr_model
+
+      - name: Restore historical inputs from uploaded v1.1 bundles
+        run: |
+          set -euxo pipefail
+          tar -xzf package_bundles/00_code_tests_reports.tar.gz -C .
+          tar -xzf package_bundles/01_curated_small_and_splits.tar.gz -C .
+          tar -xzf package_bundles/02_bip_all.tar.gz -C .
+          tar -xzf package_bundles/03_raw_pa_2015_2017.tar.gz -C .
+          tar -xzf package_bundles/04_raw_pa_2018_2020.tar.gz -C .
+          tar -xzf package_bundles/05_raw_pa_2021_2024.tar.gz -C .
+          find data -maxdepth 3 -type f -printf '%p %s bytes\n' | sort
+
+      - name: Reconstruct exact v1.2 source-only archive
+        run: |
+          set -euxo pipefail
+          cat v12_source_parts/part00.b64 \
+              v12_source_parts/part01.b64 \
+              v12_source_parts/part02.b64 \
+              v12_source_parts/part03.b64 \
+              v12_source_parts/part04.b64 > /tmp/v12_source.b64
+          base64 --decode /tmp/v12_source.b64 > /tmp/hr_model_v1.2_source_only.tar.gz
+          echo '4ee198687f6a28d13c07683d44a463835404f3f1d78d1e8f7fabef21ea18a32e  /tmp/hr_model_v1.2_source_only.tar.gz' | sha256sum --check
+          tar -xzf /tmp/hr_model_v1.2_source_only.tar.gz --strip-components=1 -C .
+          python -m compileall -q src/data features/v1.2 tests/test_no_lookahead_v12.py
+
+      - name: Build v1.2 PA and starter tables
+        run: |
+          set -o pipefail
+          /usr/bin/time -v python src/data/build_pa_v12.py 2>&1 | tee /tmp/build_pa_v12.log
+
+      - name: Build leakage-safe v1.2 park factors
+        run: |
+          set -o pipefail
+          /usr/bin/time -v python src/data/process_park_factors_v12.py 2>&1 | tee /tmp/build_park_v12.log
+
+      - name: Build v1.2 historical feature matrix
+        run: |
+          set -o pipefail
+          /usr/bin/time -v python features/v1.2/build_features.py 2>&1 | tee /tmp/build_features_v12.log
+
+      - name: Run v1.2 temporal integrity suite
+        run: |
+          set -o pipefail
+          python tests/test_no_lookahead_v12.py 2>&1 | tee /tmp/test_no_lookahead_v12.log
+
+      - name: Independently inventory generated v1.2 parquet artifacts
+        run: |
+          mkdir -p audit
+          python - <<'PY' | tee audit/v12_parquet_inventory.txt
+          from pathlib import Path
+          import hashlib
+          import pyarrow.parquet as pq
+
+          paths = [
+              Path('data/curated/pa_v12.parquet'),
+              Path('data/curated/game_starters_v12.parquet'),
+              Path('data/curated/park_factors_v12.parquet'),
+              Path('features/v1.2/game_features.parquet'),
+          ]
+          for p in paths:
+              md = pq.read_metadata(p)
+              h = hashlib.sha256(p.read_bytes()).hexdigest()
+              print('=' * 100)
+              print(f'FILE={p}')
+              print(f'BYTES={p.stat().st_size}')
+              print(f'SHA256={h}')
+              print(f'ROWS={md.num_rows}')
+              print(f'COLUMNS={md.num_columns}')
+              print(f'ROW_GROUPS={md.num_row_groups}')
+              print(md.schema)
+          PY
+          cp /tmp/build_pa_v12.log audit/
+          cp /tmp/build_park_v12.log audit/
+          cp /tmp/build_features_v12.log audit/
+          cp /tmp/test_no_lookahead_v12.log audit/
+          cp features/v1.2/_summary.json audit/
+          cp features/v1.2/feature_list.json audit/
+
+      - name: Verify headline reproduction counts
+        run: |
+          python - <<'PY'
+          import json
+          import pandas as pd
+          import pyarrow.parquet as pq
+
+          expected = {
+              'data/curated/pa_v12.parquet': 1756558,
+              'data/curated/game_starters_v12.parquet': 23191,
+              'features/v1.2/game_features.parquet': 479893,
+          }
+          for path, rows in expected.items():
+              got = pq.read_metadata(path).num_rows
+              assert got == rows, f'{path}: expected {rows:,}, got {got:,}'
+              print(f'PASS {path}: {got:,} rows')
+
+          f = pd.read_parquet('features/v1.2/game_features.parquet', columns=['split','game_date'])
+          counts = f['split'].value_counts().to_dict()
+          assert counts.get('train') == 382059, counts
+          assert counts.get('val') == 97834, counts
+          assert pd.to_datetime(f['game_date']).dt.year.max() == 2024
+          print(f'PASS split counts: {counts}')
+          print('PASS max feature year = 2024')
+          PY
+
+      - name: Upload reproduction evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v12-reproduction-evidence
+          path: audit/
+          if-no-files-found: warn
+          retention-days: 30
