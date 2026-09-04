@@ -1,0 +1,48 @@
+{
+  "model": "pruned62_aggressive_challenger",
+  "feature_count": 62,
+  "removed_features": [
+    "batter_xwoba_on_contact_career",
+    "batter_xwoba_on_contact_season",
+    "pitcher_usage_CH_30d",
+    "pitcher_usage_CU_30d",
+    "pitcher_usage_FC_30d",
+    "pitcher_usage_FF_30d",
+    "pitcher_usage_FS_30d",
+    "pitcher_usage_KC_30d",
+    "pitcher_usage_SI_30d",
+    "pitcher_usage_SL_30d",
+    "pitcher_usage_ST_30d"
+  ],
+  "best_params": {
+    "max_depth": 6,
+    "min_child_weight": 38.81708552738516,
+    "subsample": 0.6710924991111547,
+    "colsample_bytree": 0.9084814684941301,
+    "reg_alpha": 0.11645975538779937,
+    "reg_lambda": 0.8335136937073118,
+    "eta": 0.01268316853617515,
+    "gamma": 0.5394777674407116
+  },
+  "best_round": 275,
+  "tune_mean_brier": 0.10991329699754715,
+  "tune_fold_brier": {
+    "2019": 0.11543940752744675,
+    "2020": 0.11072634905576706,
+    "2021": 0.10357413440942764
+  },
+  "development_metrics": {
+    "calibrated_brier": 0.10255350917577744,
+    "calibrated_auc": 0.6167090213084372,
+    "calibrated_ap": 0.16678080367751205,
+    "calibrated_logloss": 0.3552950918674469,
+    "ece": 0.00642775620525237,
+    "daily_top5pct_hr_rate": 0.21645796064400716,
+    "daily_top4_hr_rate": 0.2381615598885794
+  },
+  "decision": "challenger_did_not_displace_full73_after_equal_retune",
+  "calibration_year": 2022,
+  "development_assessment": "2023-2024",
+  "sealed_final_holdout": 2025,
+  "holdout_2025_read": false
+}
