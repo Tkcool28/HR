@@ -23,6 +23,12 @@ import pandas as pd
 KEYS = ["game_pk", "batter_id"]
 SEED = 20260904
 TOP_FRAC = 0.05
+GENUINE_SUPPORT_FEATURES = {
+    "batter_pa_14d": 20.0,
+    "batter_pa_30d": 20.0,
+    "pitcher_pa_30d": 20.0,
+    "top_pitch_total_pitches_30d": 100.0,
+}
 
 
 def phase_from_date(s: pd.Series) -> pd.Series:
@@ -225,12 +231,13 @@ def interaction_bootstrap(
     }
 
 
+def support_feature_names(feature_names: list[str]) -> list[str]:
+    """Return only genuine count/support features, never rate-valued *_per_pa_* fields."""
+    return [c for c in GENUINE_SUPPORT_FEATURES if c in feature_names]
+
+
 def support_threshold(col: str) -> float | None:
-    if "pitch" in col and "total" in col:
-        return 100.0
-    if "pa" in col:
-        return 20.0
-    return None
+    return GENUINE_SUPPORT_FEATURES.get(col)
 
 
 def maturity_audit(
@@ -261,12 +268,7 @@ def maturity_audit(
     f["selected_full73_top5"] = f.selected_full73_top5.astype(bool)
 
     recent = [c for c in feature_names if ("14d" in c or "30d" in c) and c in f.columns]
-    support = [
-        c for c in recent
-        if support_threshold(c) is not None
-        and (c.startswith("batter_pa") or c.startswith("pitcher_pa")
-             or "_pa_vs_" in c or "total_pitches" in c)
-    ]
+    support = support_feature_names(recent)
 
     out = {
         "recent_feature_count": len(recent),
