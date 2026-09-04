@@ -4,9 +4,12 @@ on:
   push:
     branches:
       - 'feat/v1.2-reproduction-audit'
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
-# Reproduction pass 2: exact v1.2 source parts are now present on this branch.
+# Reproduction pass 3: exact v1.2 source parts are present; PR event forces a clean current-head run.
 jobs:
   reproduce-v12:
     runs-on: ubuntu-latest
