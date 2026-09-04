@@ -9,7 +9,7 @@ on:
       - main
   workflow_dispatch:
 
-# Reproduction pass 3: exact v1.2 source parts are present; PR event forces a clean current-head run.
+# Reproduction pass 4: setup-python cache disabled because this audit branch intentionally has no requirements file.
 jobs:
   reproduce-v12:
     runs-on: ubuntu-latest
@@ -23,7 +23,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: pip
 
       - name: Install v1.2 build dependencies
         run: |
