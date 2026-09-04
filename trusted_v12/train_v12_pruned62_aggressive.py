@@ -10,8 +10,15 @@ changed.
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 
-import trusted_v12.train_v12_aggressive_candidate as base
+# When executed as ``python trusted_v12/train_v12_pruned62_aggressive.py``,
+# Python places trusted_v12/ rather than the repository root on sys.path.
+# Import the sibling trainer explicitly so the wrapper works identically in CI
+# without requiring trusted_v12 to be installed as a package.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import train_v12_aggressive_candidate as base
 
 ROOT = "/workspace/hr_model"
 
