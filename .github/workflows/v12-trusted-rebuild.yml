@@ -44,6 +44,7 @@ jobs:
             data/splits/val_ids.parquet
           test ! -e work/hr_model/data/splits/holdout_ids.parquet
           test ! -e work/hr_model/models/holdout_predictions.parquet
+          cp trusted_v12/process_park_factors_trusted.py work/hr_model/src/data/process_park_factors_v12.py
           sudo mkdir -p /workspace
           sudo rm -rf /workspace/hr_model
           sudo ln -s "$GITHUB_WORKSPACE/work/hr_model" /workspace/hr_model
