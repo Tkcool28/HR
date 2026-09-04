@@ -6,6 +6,7 @@ on:
       - feat/v1.2-trustworthy-rebuild
     paths:
       - 'trusted_v12/**'
+      - 'experiments/v12_feature_family_ablations.py'
       - '.github/workflows/v12-trusted-rebuild.yml'
   workflow_dispatch:
 
@@ -71,6 +72,9 @@ jobs:
       - name: Aggressive 50-trial chronological Optuna training
         run: python trusted_v12/train_v12_aggressive_candidate.py
 
+      - name: Controlled feature-family ablations and raw ranking diagnostics
+        run: python experiments/v12_feature_family_ablations.py
+
       - name: Trusted end-to-end tests
         run: pytest -q trusted_v12/test_trusted_v12.py trusted_v12/test_qoc_trusted.py
 
@@ -82,6 +86,9 @@ jobs:
           fi
           if test -f /workspace/hr_model/reports/model_trainer_v12_trusted_report.md; then
             cat /workspace/hr_model/reports/model_trainer_v12_trusted_report.md
+          fi
+          if test -f /workspace/hr_model/models/v1.2_ablations/ablation_report.md; then
+            cat /workspace/hr_model/models/v1.2_ablations/ablation_report.md
           fi
 
       - name: Upload trusted model evidence
@@ -98,4 +105,8 @@ jobs:
             work/hr_model/models/v1.2_trusted/*.json
             work/hr_model/models/v1.2_trusted/*.csv
             work/hr_model/models/v1.2_trusted/*.joblib
+            work/hr_model/models/v1.2_ablations/*.json
+            work/hr_model/models/v1.2_ablations/*.csv
+            work/hr_model/models/v1.2_ablations/*.parquet
+            work/hr_model/models/v1.2_ablations/*.md
             work/hr_model/reports/model_trainer_v12_trusted_report.md
