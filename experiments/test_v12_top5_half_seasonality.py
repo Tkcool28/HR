@@ -7,6 +7,8 @@ from v12_top5_half_seasonality import (
     daily_selected_counts,
     phase_bootstrap,
     interaction_bootstrap,
+    support_feature_names,
+    support_threshold,
     validate_pair,
 )
 
@@ -89,6 +91,28 @@ def test_identical_models_zero_interaction():
     assert abs(inter["bootstrap_interaction"]["ci95_high"]) < 1e-12
 
 
+def test_support_features_are_counts_not_rates():
+    candidates = [
+        "batter_pa_14d",
+        "batter_pa_30d",
+        "pitcher_pa_30d",
+        "top_pitch_total_pitches_30d",
+        "batter_hr_per_pa_vs_FF_30d",
+        "pitcher_hr_per_pa_vs_SL_30d",
+        "batter_hr_rate_30d",
+    ]
+    got = support_feature_names(candidates)
+    assert set(got) == {
+        "batter_pa_14d",
+        "batter_pa_30d",
+        "pitcher_pa_30d",
+        "top_pitch_total_pitches_30d",
+    }
+    assert support_threshold("batter_pa_30d") == 20.0
+    assert support_threshold("top_pitch_total_pitches_30d") == 100.0
+    assert support_threshold("batter_hr_per_pa_vs_FF_30d") is None
+
+
 def test_2025_fails_closed():
     obvious, full73 = synthetic_pair()
     obvious.loc[0, "year"] = 2025
@@ -105,5 +129,6 @@ if __name__ == "__main__":
     test_deterministic_top5_exact_size()
     test_positive_second_half_interaction()
     test_identical_models_zero_interaction()
+    test_support_features_are_counts_not_rates()
     test_2025_fails_closed()
     print("top5 half-seasonality synthetic controls PASS")
