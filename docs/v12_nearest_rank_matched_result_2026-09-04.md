@@ -2,9 +2,9 @@
 
 ## Scope
 
-This records the precommitted same-slate nearest-obvious-rank matched follow-up for the frozen full73 champion.
+This records the precommitted same-slate nearest-obvious-rank matched follow-up for the frozen full73 champion and the subsequently frozen 2022 freshness replay.
 
-The design and decision thresholds were committed before the result in `docs/v12_matched_pair_precommit_2026-09-04.md`.
+The design and decision thresholds were committed before the 2023–24 matched result in `docs/v12_matched_pair_precommit_2026-09-04.md`.
 
 **2025 was not read or evaluated and remains sealed.**
 
@@ -45,7 +45,7 @@ Therefore part of the original 17+ separation was indeed band-composition: full7
 
 However, the residual matched point estimate remains large enough to clear the precommitted +5 pp magnitude floor. It does **not** clear the statistical-survival rule because the clustered CI crosses zero. The exact one-sided matched-binary p-value is 0.0361 before multiplicity adjustment and 0.1084 after Holm correction across the three predeclared bands.
 
-**Decision: do not promote 17+ to an operational hidden-pick rule.** It remains a plausible but unresolved differentiated signal.
+**Decision: do not promote 17+ to an operational hidden-pick rule.**
 
 ## Year diagnostics for 17+
 
@@ -56,18 +56,58 @@ However, the residual matched point estimate remains large enough to clear the p
 
 Both years retain a positive point estimate after nearest-rank matching, but neither yearly CI independently resolves the effect. The smaller 2024 sample is especially wide.
 
-## Freshness check
+## Frozen 2022 freshness replay
 
-The already-frozen next step is to replay the exact same disagreement bands, matching implementation, and +5 pp / CI thresholds on **2022** using raw full73 scores from a model trained only through 2021.
+The exact same rank bands, nearest-rank matching implementation, +5 pp magnitude floor, +2 pp strong-CI floor, and 10,000-replicate date-cluster bootstrap were replayed on 2022 without changing any cutoff after seeing 2023–24.
 
-2022 is not a pristine final holdout: it was part of the broader model-development/calibration architecture. For this check, calibration is not used and the raw XGBoost rank is out-of-sample relative to the 2015–2021 base fit. The purpose is replication/freshness only.
+For this replay:
 
-No 2022 result may change the band cutoffs or decision thresholds.
+- the full73 raw XGBoost architecture was trained on **2015–2021 only**;
+- 2022 was scored out-of-sample with **raw XGBoost probabilities**;
+- isotonic calibration was **not** fit/evaluated for the freshness result;
+- the obvious-power proxy used the same five frozen long-horizon batter features and preprocessing based on 2015–2021;
+- 2022 is explicitly a development freshness/replication check, not a pristine final holdout.
 
-## Current verdict
+The reproducible workflow rebuilt the trusted 406,728-row / 73-feature 2015–24 matrix, scored 43,740 2022 batter-games over 179 slate dates, and passed the no-2025 contract.
 
-- The nearest-rank test materially reduced the apparent 17+ lift, validating the need for the control.
-- The residual +9.04 pp point estimate is potentially meaningful but **fails the precommitted survival criterion** because its CI crosses zero.
-- 5–8 and 9–16 also fail the operational rule after matching.
-- No hidden-pick policy is promoted from 2023–24.
-- 2025 remains sealed.
+### 2022 matched results
+
+| Obvious rank | N pairs | Selected rate | Matched control | Lift | 95% paired CI | Holm p | Precommitted grade |
+|---|---:|---:|---:|---:|---:|---:|---|
+| **5–8** | 156 | **23.72%** | 12.82% | **+10.90 pp** | **[+2.92, +18.95] pp** | **0.024** | **Strong** |
+| 9–16 | 142 | 16.90% | 14.08% | +2.82 pp | [-5.56, +10.96] pp | 0.627 | Fail |
+| **17+** | 93 | **12.90%** | **13.98%** | **-1.08 pp** | **[-10.64, +8.33] pp** | **0.668** | **Fail** |
+
+### Replication interpretation
+
+The primary deep-disagreement lead **does not replicate in 2022**. Rank-17+ full73 promotions went from a +9.04 pp matched point estimate in combined 2023–24 to **-1.08 pp** in the frozen 2022 replay. The 2022 interval is wide, but its center is essentially zero/slightly negative and it fails both the magnitude and CI criteria.
+
+This materially weakens the hypothesis that **obvious-power rank 17+** is a stable hidden-pick regime. It should be **demoted, not refined into another post-hoc cutoff**.
+
+A different band, 5–8, happens to be very strong in 2022: +10.90 pp with a lower CI bound of +2.92 pp and Holm p=.024, satisfying the precommitted strong-signal thresholds **for that year**. We will not switch the hidden-pick hypothesis to 5–8 after observing that result, because 5–8 failed the combined 2023–24 matched test (+3.01 pp, CI crossing zero). Treating the best band in each period as the target would be exactly the subgroup chasing this process is designed to prevent.
+
+The band instability is itself useful evidence: contextual promotions appear capable of working, but **the location of the strongest disagreement signal is not stable enough to encode as a rank-band betting policy from development data**.
+
+## Relationship to the broader top-5% result
+
+This failure does **not** invalidate the previously resolved broad ranking result:
+
+- full73 daily top 5%: **21.69%**
+- obvious-power daily top 5%: **20.28%**
+- lift: **+1.41 pp**
+- paired 2023–24 date-bootstrap CI: **+0.42 to +2.39 pp**
+
+That test asks a broader, pre-existing question: whether the contextual model improves the actionable candidate pool relative to long-horizon batter power. The deep-disagreement analyses asked a much narrower follow-up question about where that advantage concentrates.
+
+Current evidence therefore supports the model as a **better broad top-5% ranking engine**, but does not support a special 17+ (or any other disagreement-band) production rule.
+
+## Final current verdict
+
+1. The nearest-rank test materially reduced the apparent 17+ lift, validating the tighter control.
+2. The remaining 2023–24 +9.04 pp 17+ point estimate failed its precommitted CI criterion.
+3. The exact frozen 2022 replay then produced **-1.08 pp** for 17+, so the deep-disagreement hypothesis does **not** receive replication support.
+4. The strong 2022 5–8 result is recorded but is **not promoted post hoc**, because that band failed in 2023–24.
+5. No disagreement-rank hidden-pick policy is promoted.
+6. The broader full73 daily top-5% advantage over obvious-power remains the strongest current evidence of actionable contextual ranking signal.
+7. Further development-data subgroup mining should stop unless a new hypothesis is justified independently and predeclared; repeated slicing of 2023–24 would further erode inferential value.
+8. **2025 remains sealed.**
