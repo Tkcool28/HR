@@ -1,3 +1,4 @@
+# Trigger recovery from exact immutable 2025 acquisition artifact.
 name: v1.2 frozen 2025 one-shot recovery
 
 on:
@@ -87,7 +88,6 @@ jobs:
           gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${PRIOR_ARTIFACT_ID}/zip" > prior.zip
           echo "${PRIOR_ARTIFACT_SHA256}  prior.zip" | sha256sum -c -
           unzip -q prior.zip -d prior_artifact
-          find prior_artifact -maxdepth 5 -type f | sort
           test -f prior_artifact/data/raw/pa_2025.parquet
           test -f prior_artifact/data/raw/bip_2025_trusted.parquet
           test -f prior_artifact/data/raw/holdout_2025_acquisition.json
