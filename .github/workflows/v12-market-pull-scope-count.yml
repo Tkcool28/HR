@@ -40,6 +40,8 @@ jobs:
             --historical hist/historical_scored.parquet \
             --holdout hold/holdout_2025/2025_predictions_and_outcomes.parquet \
             --out out/market_pull_scope.json
+      - name: Report credit contract
+        run: echo 'No Odds API requests are made by this workflow.'
       - uses: actions/upload-artifact@v4
         with:
           name: v12-market-pull-scope-count
