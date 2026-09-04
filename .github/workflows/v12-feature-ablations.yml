@@ -1,0 +1,99 @@
+name: v1.2 frozen feature family ablations
+
+on:
+  push:
+    branches:
+      - feat/v1.2-trustworthy-rebuild
+    paths:
+      - '.github/workflows/v12-feature-ablations.yml'
+  workflow_dispatch:
+
+jobs:
+  ablations:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            'pandas==2.2.3' 'numpy>=1.26,<3' 'pyarrow>=16,<22' \
+            'requests>=2.32,<3' 'scikit-learn>=1.5,<2' \
+            'xgboost>=2.1,<4'
+
+      - name: Reconstruct trusted 2015-2024 inputs
+        run: |
+          set -euxo pipefail
+          rm -rf work
+          mkdir -p work/hr_model
+          tar -xzf package_bundles/v1.2_correction/00_v12_code_tests_reports.tar.gz -C work
+          tar -xzf package_bundles/03_raw_pa_2015_2017.tar.gz -C work/hr_model
+          tar -xzf package_bundles/04_raw_pa_2018_2020.tar.gz -C work/hr_model
+          tar -xzf package_bundles/05_raw_pa_2021_2024.tar.gz -C work/hr_model
+          tar -xzf package_bundles/02_bip_all.tar.gz -C work/hr_model
+          tar -xzf package_bundles/01_curated_small_and_splits.tar.gz -C work/hr_model \
+            data/curated/game.parquet \
+            data/splits/train_ids.parquet \
+            data/splits/val_ids.parquet
+          test ! -e work/hr_model/data/splits/holdout_ids.parquet
+          test ! -e work/hr_model/models/holdout_predictions.parquet
+          cp trusted_v12/process_park_factors_trusted.py work/hr_model/src/data/process_park_factors_v12.py
+          sudo mkdir -p /workspace
+          sudo rm -rf /workspace/hr_model
+          sudo ln -s "$GITHUB_WORKSPACE/work/hr_model" /workspace/hr_model
+
+      - name: Build trusted core and QoC matrix
+        run: |
+          python trusted_v12/rebuild_v12_trusted.py
+          python trusted_v12/augment_qoc_trusted.py
+
+      - name: Materialize frozen aggressive reference contract
+        run: |
+          mkdir -p /workspace/hr_model/models/v1.2_trusted
+          cat > /workspace/hr_model/models/v1.2_trusted/metrics.json <<'JSON'
+          {
+            "design": {"holdout_2025_read": false},
+            "n_features": 73,
+            "best_params": {
+              "max_depth": 4,
+              "min_child_weight": 1.5470025855927074,
+              "subsample": 0.714715411256542,
+              "colsample_bytree": 0.8457664821163214,
+              "reg_alpha": 8.399022165477417,
+              "reg_lambda": 3.372579512897184,
+              "eta": 0.028193503897872348,
+              "gamma": 2.43210710108499
+            },
+            "best_round": 194,
+            "xgb_raw_test": {
+              "brier": 0.10270713269710541,
+              "auc": 0.617935281906834
+            },
+            "xgb_calibrated_test": {
+              "brier": 0.10250002890825272,
+              "auc": 0.6175121425142043
+            },
+            "test_ece": 0.006258736403651375
+          }
+          JSON
+
+      - name: Run frozen feature-family ablations and rankings
+        run: python experiments/v12_feature_family_ablations.py
+
+      - name: Upload ablation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v12-feature-family-ablations
+          if-no-files-found: error
+          path: |
+            work/hr_model/models/v1.2_ablations/*.json
+            work/hr_model/models/v1.2_ablations/*.csv
+            work/hr_model/models/v1.2_ablations/*.parquet
+            work/hr_model/models/v1.2_ablations/*.md
