@@ -6,6 +6,7 @@ on:
       - 'feat/v1.2-reproduction-audit'
   workflow_dispatch:
 
+# Reproduction pass 2: exact v1.2 source parts are now present on this branch.
 jobs:
   reproduce-v12:
     runs-on: ubuntu-latest
@@ -111,7 +112,6 @@ jobs:
       - name: Verify headline reproduction counts
         run: |
           python - <<'PY'
-          import json
           import pandas as pd
           import pyarrow.parquet as pq
 
